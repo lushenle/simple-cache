@@ -3,11 +3,10 @@ package cache
 import (
 	"fmt"
 	"testing"
-	"time"
 )
 
 func BenchmarkSetGet(b *testing.B) {
-	c := New(1 * time.Second)
+	c := newTestCache()
 	b.ReportAllocs()
 
 	b.Run("SingleKey", func(b *testing.B) {
@@ -31,7 +30,7 @@ func BenchmarkSetGet(b *testing.B) {
 }
 
 func BenchmarkSearch(b *testing.B) {
-	c := New(1 * time.Second)
+	c := newTestCache()
 	// Add 10,000 test data
 	for i := 0; i < 10000; i++ {
 		key := fmt.Sprintf("key:%04d", i)

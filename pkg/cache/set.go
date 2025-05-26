@@ -5,9 +5,12 @@ import (
 	"time"
 
 	"github.com/lushenle/simple-cache/pkg/metrics"
+	"go.uber.org/zap"
 )
 
 func (c *Cache) Set(key, value string, expire string) error {
+	c.logger.Info("set", zap.String("key", key))
+
 	start := time.Now()
 	var success bool
 	defer func() {

@@ -5,18 +5,19 @@ import (
 	"embed"
 	"errors"
 	"io/fs"
-	"log"
 	"net"
 	"net/http"
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/lushenle/simple-cache/pkg/cache"
+	"github.com/lushenle/simple-cache/pkg/log"
 	"github.com/lushenle/simple-cache/pkg/metrics"
 	"github.com/lushenle/simple-cache/pkg/pb"
 	"github.com/lushenle/simple-cache/pkg/server"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -33,9 +34,24 @@ func main() {
 	http.Handle("/metrics", promhttp.Handler())
 	go http.ListenAndServe(":2112", nil)
 
+	plugin := log.NewStdoutPlugin(zapcore.DebugLevel)
+	logger := log.NewLogger(plugin)
+
 	// Create a new gRPC server and listen on port 50051
-	c := cache.New(30 * time.Second)
+	c := cache.New(30*time.Second, logger)
 	srv := server.New(c)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	waitGroup, ctx := errgroup.WithContext(ctx)
+	waitGroup.Go(func() error {
+		runGatewayServer(ctx, waitGroup, srv)
+		return nil
+	})
+	waitGroup.Go(func() error {
+		<-ctx.Done()
+		cancel()
+		return nil
+	})
 
 	// Start the gRPC server
 	lis, _ := net.Listen("tcp", ":5051")
@@ -44,9 +60,7 @@ func main() {
 	grpcServer.Serve(lis)
 }
 
-func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group) {
-	svr := server.New(cache.New())
-
+func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *server.CacheService) {
 	jsonOption := runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.JSONPb{
 		MarshalOptions: protojson.MarshalOptions{
 			UseProtoNames: true,
@@ -59,7 +73,7 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group) {
 	grpcMux := runtime.NewServeMux(jsonOption)
 	err := pb.RegisterCacheServiceHandlerServer(ctx, grpcMux, svr)
 	if err != nil {
-		log.Fatalf("failed to register gRPC gateway: %v", err)
+		return
 	}
 
 	mux := http.NewServeMux()
@@ -68,7 +82,7 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group) {
 	// Access the embedded 'swagger' folder.
 	swaggerFS, err := fs.Sub(content, "swagger")
 	if err != nil {
-		log.Panicf("failed to access embedded swagger folder")
+		return
 	}
 
 	// Create a file server to serve the embedded content.
@@ -100,13 +114,11 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group) {
 	}
 
 	waitGroup.Go(func() error {
-		log.Printf("start HTTP gateway server at %s", httpServer.Addr)
 		err = httpServer.ListenAndServe()
 		if err != nil {
 			if errors.Is(err, http.ErrServerClosed) {
 				return nil
 			}
-			log.Print("HTTP gateway server failed to serve")
 			return err
 		}
 		return nil
@@ -114,15 +126,12 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group) {
 
 	waitGroup.Go(func() error {
 		<-ctx.Done()
-		log.Print("graceful shutdown HTTP gateway server")
 
 		err = httpServer.Shutdown(context.Background())
 		if err != nil {
-			log.Print("failed to shutdown HTTP gateway server")
 			return err
 		}
 
-		log.Print("HTTP gateway server is stopped")
 		return nil
 	})
 }

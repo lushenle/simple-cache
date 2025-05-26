@@ -3,11 +3,11 @@ package cache
 import (
 	"container/heap"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/armon/go-radix"
 	"github.com/lushenle/simple-cache/pkg/metrics"
+	"go.uber.org/zap"
 )
 
 type Item struct {
@@ -16,23 +16,19 @@ type Item struct {
 }
 
 type Cache struct {
-	mu            *metrics.InstrumentedRWMutex
-	items         map[string]*Item
-	prefixTree    *radix.Tree // Prefix tree for keys
-	searchMetrics *searchMetrics
+	mu         *metrics.InstrumentedRWMutex
+	items      map[string]*Item
+	prefixTree *radix.Tree // Prefix tree for keys
 
 	expirationHeap  *ExpirationHeap
 	stopChan        chan struct{}
 	cleanupInterval time.Duration
 	wg              sync.WaitGroup
+
+	logger *zap.Logger
 }
 
-type searchMetrics struct {
-	total     atomic.Int64
-	regexHits atomic.Int64
-}
-
-func New(cleanupInterval time.Duration) *Cache {
+func New(cleanupInterval time.Duration, logger *zap.Logger) *Cache {
 	if cleanupInterval <= 0 {
 		cleanupInterval = time.Minute // Default cleanup interval
 	}
@@ -44,6 +40,7 @@ func New(cleanupInterval time.Duration) *Cache {
 		expirationHeap:  &ExpirationHeap{},
 		stopChan:        make(chan struct{}),
 		cleanupInterval: cleanupInterval,
+		logger:          logger,
 	}
 
 	heap.Init(c.expirationHeap)
@@ -53,6 +50,7 @@ func New(cleanupInterval time.Duration) *Cache {
 }
 
 func (c *Cache) Close() {
+	c.logger.Info("closing cache")
 	close(c.stopChan)
 	c.wg.Wait()
 }

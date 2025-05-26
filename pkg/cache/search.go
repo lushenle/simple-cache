@@ -6,9 +6,12 @@ import (
 	"time"
 
 	"github.com/lushenle/simple-cache/pkg/metrics"
+	"go.uber.org/zap"
 )
 
 func (c *Cache) Search(pattern string, useRegex bool) ([]string, error) {
+	c.logger.Info("search", zap.String("pattern", pattern))
+
 	c.mu.RLock("read")
 	defer c.mu.RUnlock()
 
@@ -31,6 +34,8 @@ func (c *Cache) Search(pattern string, useRegex bool) ([]string, error) {
 }
 
 func (c *Cache) searchPrefix(prefix string) []string {
+	c.logger.Info("search", zap.String("prefix", prefix))
+
 	result := make([]string, 0)
 
 	c.prefixTree.WalkPrefix(prefix, func(s string, v interface{}) bool {
@@ -47,6 +52,8 @@ func (c *Cache) searchPrefix(prefix string) []string {
 }
 
 func (c *Cache) searchGeneric(pattern string, useRegex bool) ([]string, error) {
+	c.logger.Info("search", zap.String("pattern", pattern), zap.Bool("useRegex", useRegex))
+
 	var (
 		re  *regexp.Regexp
 		err error
@@ -98,6 +105,8 @@ func (c *Cache) searchGeneric(pattern string, useRegex bool) ([]string, error) {
 }
 
 func (c *Cache) searchWorker(pattern string, useRegex bool, re *regexp.Regexp, results chan string) {
+	c.logger.Info("search", zap.String("pattern", pattern))
+
 	seen := make(map[string]struct{})
 
 	c.prefixTree.Walk(func(s string, v interface{}) bool {

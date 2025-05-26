@@ -4,9 +4,12 @@ import (
 	"time"
 
 	"github.com/lushenle/simple-cache/pkg/metrics"
+	"go.uber.org/zap"
 )
 
 func (c *Cache) Get(key string) (string, bool) {
+	c.logger.Info("get", zap.String("key", key))
+
 	start := time.Now()
 	var success bool
 	defer func() {

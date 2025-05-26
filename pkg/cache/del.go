@@ -5,9 +5,12 @@ import (
 	"time"
 
 	"github.com/lushenle/simple-cache/pkg/metrics"
+	"go.uber.org/zap"
 )
 
 func (c *Cache) Del(key string) bool {
+	c.logger.Info("del", zap.String("key", key))
+
 	start := time.Now()
 	defer func() {
 		metrics.ObserveOperation(time.Since(start), "del")

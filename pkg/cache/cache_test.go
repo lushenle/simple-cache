@@ -10,7 +10,7 @@ import (
 )
 
 func TestBasicOperations(t *testing.T) {
-	c := New(30 * time.Second)
+	c := newTestCache()
 
 	t.Run("SetAndGet", func(t *testing.T) {
 		err := c.Set("key1", "value1", "")
@@ -38,7 +38,7 @@ func TestBasicOperations(t *testing.T) {
 }
 
 func TestSearch(t *testing.T) {
-	c := New(30 * time.Second)
+	c := newTestCache()
 	keys := []string{
 		"user:1001",
 		"user:1002",
@@ -74,7 +74,7 @@ func TestSearch(t *testing.T) {
 }
 
 func BenchmarkConcurrentAccess(b *testing.B) {
-	c := New(30 * time.Second)
+	c := newTestCache()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
@@ -88,7 +88,7 @@ func BenchmarkConcurrentAccess(b *testing.B) {
 }
 
 func TestSearchConcurrency(t *testing.T) {
-	c := New(30 * time.Second)
+	c := newTestCache()
 
 	// Add 1000 keys
 	for i := 0; i < 1000; i++ {
@@ -111,7 +111,7 @@ func TestSearchConcurrency(t *testing.T) {
 }
 
 func TestExpirationCleanup(t *testing.T) {
-	c := New(100 * time.Millisecond)
+	c := newTestCache()
 	defer c.Close()
 
 	// 设置立即过期的键
@@ -131,7 +131,7 @@ func TestExpirationCleanup(t *testing.T) {
 }
 
 func TestHeapMaintenance(t *testing.T) {
-	c := New(time.Minute)
+	c := newTestCache()
 	defer c.Close()
 
 	c.Set("key1", "v", "1m")

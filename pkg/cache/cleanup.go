@@ -6,6 +6,8 @@ import (
 )
 
 func (c *Cache) cleanupWorker() {
+	c.logger.Info("starting cleanup worker")
+
 	defer c.wg.Done()
 
 	ticker := time.NewTicker(c.cleanupInterval)
@@ -22,6 +24,8 @@ func (c *Cache) cleanupWorker() {
 }
 
 func (c *Cache) cleanupExpired() {
+	c.logger.Info("starting cleanup expired")
+
 	c.mu.Lock("write")
 	defer c.mu.Unlock()
 
