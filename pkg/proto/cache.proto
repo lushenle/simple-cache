@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package pb;
+
+import "get.proto";
+import "set.proto";
+import "del.proto";
+import "reset.proto";
+import "search.proto";
+import "expire_key.proto";
+
+import "google/api/annotations.proto";
+import "protoc-gen-openapiv2/options/annotations.proto";
+
+option go_package = "github.com/lushenle/simple-cache/pkg/pb";
+
+option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_swagger) = {
+  info: {
+    title: "Simple Cache API";
+    version: "v1.0.0";
+    contact: {
+      name: "Shenle Lu";
+      url: "https://github.com/lushenle";
+      email: "lushenle@gmail.com";
+    };
+  };
+};
+
+// CacheService is the gRPC API for the cache service.
+service CacheService {
+  rpc Get(GetRequest) returns (GetResponse) {
+      option (google.api.http) = {
+          get: "/v1/{key=*}"
+      };
+      option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+          summary: "Get a value by key.";
+          description: "USe this api to get a value by key."
+          operation_id: "get";
+          tags: "cache";
+      };
+  }
+
+  rpc Set(SetRequest) returns (SetResponse) {
+      option (google.api.http) = {
+          post: "/v1/{key=*}"
+          body: "*"
+      };
+      option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+          summary: "Set a value by key.";
+          description: "USe this api to set a value by key."
+          operation_id: "set";
+          tags: "cache";
+      };
+  }
+
+  rpc Del(DelRequest) returns (DelResponse) {
+      option (google.api.http) = {
+          delete: "/v1/{key=*}"
+      };
+      option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+          summary: "Delete a value by key.";
+          description: "USe this api to delete a value by key."
+          operation_id: "del";
+          tags: "cache";
+      };
+  }
+
+  rpc Reset(ResetRequest) returns (ResetResponse) {
+      option (google.api.http) = {
+          delete: "/v1"
+      };
+      option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+          summary: "Reset the cache.";
+          description: "USe this api to reset the cache."
+          operation_id: "reset";
+          tags: "cache";
+      };
+  }
+  rpc Search(SearchRequest) returns (SearchResponse) {
+      option (google.api.http) = {
+          get: "/v1/search"
+          additional_bindings {
+              get: "/v1/search/{pattern=*}"
+          }
+          additional_bindings {
+              get: "/v1/search/{pattern=*}/{mode=*}"
+          }
+//          additional_bindings {
+//              get: "/v1/search/{pattern=*}/{mode=*}/{limit=*}"
+//          }
+      };
+      option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+          summary: "Search keys by prefix.";
+          description: "USe this api to search keys by prefix."
+          operation_id: "search";
+          tags: "cache";
+      };
+  }
+
+  rpc ExpireKey(ExpireKeyRequest) returns (ExpireKeyResponse){
+      option (google.api.http) = {
+          post: "/v1/{key=*}/expire"
+      };
+      option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+          summary: "Expire a key.";
+          description: "USe this api to expire a key."
+          operation_id: "expireKey";
+          tags: "cache";
+      };
+  }
+}

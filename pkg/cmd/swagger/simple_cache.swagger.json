@@ -1,0 +1,429 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Simple Cache API",
+    "version": "v1.0.0",
+    "contact": {
+      "name": "Shenle Lu",
+      "url": "https://github.com/lushenle",
+      "email": "lushenle@gmail.com"
+    }
+  },
+  "tags": [
+    {
+      "name": "CacheService"
+    }
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {
+    "/v1": {
+      "delete": {
+        "summary": "Reset the cache.",
+        "description": "USe this api to reset the cache.",
+        "operationId": "reset",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/pbResetResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "cache"
+        ]
+      }
+    },
+    "/v1/search": {
+      "get": {
+        "summary": "Search keys by prefix.",
+        "description": "USe this api to search keys by prefix.",
+        "operationId": "search",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/pbSearchResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "pattern",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "enum": [
+              "WILDCARD",
+              "REGEX"
+            ],
+            "default": "WILDCARD"
+          }
+        ],
+        "tags": [
+          "cache"
+        ]
+      }
+    },
+    "/v1/search/{pattern}": {
+      "get": {
+        "summary": "Search keys by prefix.",
+        "description": "USe this api to search keys by prefix.",
+        "operationId": "search",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/pbSearchResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "pattern",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "pattern": "[^/]+"
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "enum": [
+              "WILDCARD",
+              "REGEX"
+            ],
+            "default": "WILDCARD"
+          }
+        ],
+        "tags": [
+          "cache"
+        ]
+      }
+    },
+    "/v1/search/{pattern}/{mode}": {
+      "get": {
+        "summary": "Search keys by prefix.",
+        "description": "USe this api to search keys by prefix.",
+        "operationId": "search",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/pbSearchResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "pattern",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "pattern": "[^/]+"
+          },
+          {
+            "name": "mode",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "enum": [
+              "WILDCARD",
+              "REGEX"
+            ],
+            "pattern": "[^/]+"
+          }
+        ],
+        "tags": [
+          "cache"
+        ]
+      }
+    },
+    "/v1/{key}": {
+      "get": {
+        "summary": "Get a value by key.",
+        "description": "USe this api to get a value by key.",
+        "operationId": "get",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/pbGetResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "pattern": "[^/]+"
+          }
+        ],
+        "tags": [
+          "cache"
+        ]
+      },
+      "delete": {
+        "summary": "Delete a value by key.",
+        "description": "USe this api to delete a value by key.",
+        "operationId": "del",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/pbDelResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "pattern": "[^/]+"
+          }
+        ],
+        "tags": [
+          "cache"
+        ]
+      },
+      "post": {
+        "summary": "Set a value by key.",
+        "description": "USe this api to set a value by key.",
+        "operationId": "set",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/pbSetResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "pattern": "[^/]+"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/CacheServiceSetBody"
+            }
+          }
+        ],
+        "tags": [
+          "cache"
+        ]
+      }
+    },
+    "/v1/{key}/expire": {
+      "post": {
+        "summary": "Expire a key.",
+        "description": "USe this api to expire a key.",
+        "operationId": "expireKey",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/pbExpireKeyResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "pattern": "[^/]+"
+          }
+        ],
+        "tags": [
+          "cache"
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "CacheServiceSetBody": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "string"
+        },
+        "expire": {
+          "type": "string"
+        }
+      }
+    },
+    "SearchRequestMatchMode": {
+      "type": "string",
+      "enum": [
+        "WILDCARD",
+        "REGEX"
+      ],
+      "default": "WILDCARD"
+    },
+    "pbDelResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "existed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "pbExpireKeyResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "existed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "pbGetResponse": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "string"
+        },
+        "found": {
+          "type": "boolean"
+        }
+      }
+    },
+    "pbResetResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "keysCleared": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "pbSearchResponse": {
+      "type": "object",
+      "properties": {
+        "keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "pbSetResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      }
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    },
+    "rpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    }
+  }
+}

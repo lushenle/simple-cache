@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package pb;
+
+option go_package = "github.com/lushenle/simple-cache/pkg/pb";
+
+message SearchRequest {
+  string pattern = 1;
+  enum MatchMode {
+    WILDCARD = 0;
+    REGEX = 1;
+  }
+  MatchMode mode = 2;
+}
+
+message SearchResponse {
+  repeated string keys = 1;
+}
