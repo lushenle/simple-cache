@@ -8,7 +8,7 @@ vet:
 
 .PHONY: test
 test:
-	go test -v -count=1 -cover --short ./...
+	go test -v -count=1 -cover ./...
 
 .PHONY: proto
 proto:

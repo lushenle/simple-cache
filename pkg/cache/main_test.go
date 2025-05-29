@@ -9,12 +9,17 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-func newTestCache() *Cache {
+func newTestCache(cleanupInterval ...time.Duration) *Cache {
 	plugin := log.NewStdoutPlugin(zapcore.DebugLevel)
 	logger := log.NewLogger(plugin)
 
-	c := New(time.Minute, logger)
-	defer c.Close()
+	interval := time.Minute
+	if len(cleanupInterval) > 0 {
+		interval = cleanupInterval[0]
+	}
+
+	c := New(interval, logger)
+	// defer c.Close() // Close should be handled by the caller of newTestCache
 
 	return c
 }

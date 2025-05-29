@@ -11,6 +11,7 @@ import (
 
 func TestBasicOperations(t *testing.T) {
 	c := newTestCache()
+	defer c.Close()
 
 	t.Run("SetAndGet", func(t *testing.T) {
 		err := c.Set("key1", "value1", "")
@@ -39,6 +40,7 @@ func TestBasicOperations(t *testing.T) {
 
 func TestSearch(t *testing.T) {
 	c := newTestCache()
+	defer c.Close()
 	keys := []string{
 		"user:1001",
 		"user:1002",
@@ -75,6 +77,7 @@ func TestSearch(t *testing.T) {
 
 func BenchmarkConcurrentAccess(b *testing.B) {
 	c := newTestCache()
+	defer c.Close()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
@@ -89,6 +92,7 @@ func BenchmarkConcurrentAccess(b *testing.B) {
 
 func TestSearchConcurrency(t *testing.T) {
 	c := newTestCache()
+	defer c.Close()
 
 	// Add 1000 keys
 	for i := 0; i < 1000; i++ {
@@ -111,7 +115,8 @@ func TestSearchConcurrency(t *testing.T) {
 }
 
 func TestExpirationCleanup(t *testing.T) {
-	c := newTestCache()
+	// Use a short cleanup interval for this test
+	c := newTestCache(50 * time.Millisecond)
 	defer c.Close()
 
 	// 设置立即过期的键
@@ -119,8 +124,8 @@ func TestExpirationCleanup(t *testing.T) {
 	c.Set("temp2", "value", "1ms")
 	c.Set("valid", "value", "1h")
 
-	// 等待清理周期
-	time.Sleep(200 * time.Millisecond)
+	// 等待清理周期 (must be longer than cleanupInterval and allow for processing)
+	time.Sleep(150 * time.Millisecond)
 
 	c.mu.RLock("read")
 	defer c.mu.RUnlock()
