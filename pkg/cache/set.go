@@ -18,6 +18,10 @@ func (c *Cache) Set(key, value string, expire string) error {
 		metrics.IncOperation("set", success)
 	}()
 
+	// Acquire an item from the pool
+	item := itemPool.Get().(*Item)
+	item.value = value
+
 	var expiration time.Time
 	if expire != "" {
 		duration, err := time.ParseDuration(expire)
@@ -44,6 +48,9 @@ func (c *Cache) Set(key, value string, expire string) error {
 	})
 
 	success = true
+
+	// Release the item back to the pool
+	itemPool.Put(item)
 
 	c.updateSizeMetrics()
 

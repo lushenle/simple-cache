@@ -3,14 +3,20 @@ package server
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/lushenle/simple-cache/pkg/cache"
+	"github.com/lushenle/simple-cache/pkg/log"
 	"github.com/lushenle/simple-cache/pkg/pb"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestGRPCServer(t *testing.T) {
-	c := cache.New()
+	plugin := log.NewStdoutPlugin(zapcore.DebugLevel)
+	logger := log.NewLogger(plugin)
+
+	c := cache.New(time.Second*3, logger)
 	srv := New(c)
 
 	t.Run("SetGet", func(t *testing.T) {

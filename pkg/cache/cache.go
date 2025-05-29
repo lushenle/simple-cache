@@ -15,6 +15,11 @@ type Item struct {
 	expiration time.Time
 }
 
+// itemPool for reusing Item instances
+var itemPool = sync.Pool{
+	New: func() interface{} { return new(Item) },
+}
+
 type Cache struct {
 	mu         *metrics.InstrumentedRWMutex
 	items      map[string]*Item

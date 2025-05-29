@@ -2,14 +2,15 @@ syntax = "proto3";
 
 package pb;
 
+import "google/protobuf/any.proto";
+
 option go_package = "github.com/lushenle/simple-cache/pkg/pb";
 
-message SetRequest {
+message GetRequest {
   string key = 1;
-  string value = 2;
-  string expire = 3;
 }
 
-message SetResponse {
-  bool success = 1;
+message GetResponse {
+  google.protobuf.Any value = 1;
+  bool found = 2;
 }

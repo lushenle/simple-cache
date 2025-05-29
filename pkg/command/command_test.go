@@ -2,14 +2,20 @@ package command
 
 import (
 	"testing"
+	"time"
 
 	"github.com/lushenle/simple-cache/pkg/cache"
+	"github.com/lushenle/simple-cache/pkg/log"
 	"github.com/lushenle/simple-cache/pkg/pb"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestSetCommand(t *testing.T) {
-	c := cache.New()
+	plugin := log.NewStdoutPlugin(zapcore.DebugLevel)
+	logger := log.NewLogger(plugin)
+
+	c := cache.New(time.Second*3, logger)
 	cmd := &SetCommand{
 		Key:    "test",
 		Value:  "value",
@@ -26,7 +32,10 @@ func TestSetCommand(t *testing.T) {
 }
 
 func TestDelCommand(t *testing.T) {
-	c := cache.New()
+	plugin := log.NewStdoutPlugin(zapcore.DebugLevel)
+	logger := log.NewLogger(plugin)
+
+	c := cache.New(time.Second*3, logger)
 	err := c.Set("exist", "value", "")
 	assert.Nil(t, err)
 
