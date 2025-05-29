@@ -6,6 +6,10 @@ fmt:
 vet:
 	go vet ./...
 
+.PHONY: test
+test:
+	go test -v -count=1 -cover --short ./...
+
 .PHONY: proto
 proto:
 	rm -f pkg/pb/*.go

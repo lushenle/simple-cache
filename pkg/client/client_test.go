@@ -7,10 +7,13 @@ import (
 	"time"
 
 	"github.com/lushenle/simple-cache/pkg/cache"
+	"github.com/lushenle/simple-cache/pkg/log"
 	"github.com/lushenle/simple-cache/pkg/pb"
 	"github.com/lushenle/simple-cache/pkg/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
@@ -20,7 +23,7 @@ const (
 	bufSize     = 1024 * 1024
 	testKey     = "test-key"
 	testValue   = "test-value"
-	testTTL     = 10 * time.Minute
+	testTTL     = 10 * time.Second
 	testPattern = `^test-\d$`
 )
 
@@ -29,11 +32,16 @@ var lis *bufconn.Listener
 func init() {
 	lis = bufconn.Listen(bufSize)
 	s := grpc.NewServer()
-	cacheSrv := server.New(cache.New())
+
+	plugin := log.NewStdoutPlugin(zapcore.DebugLevel)
+	logger := log.NewLogger(plugin)
+
+	cacheSrv := server.New(cache.New(10*time.Second, logger))
 	pb.RegisterCacheServiceServer(s, cacheSrv)
 	go func() {
 		if err := s.Serve(lis); err != nil {
-			panic("failed to start test server: " + err.Error())
+			logger.Error("failed to start test server", zap.Error(err))
+			panic(err)
 		}
 	}()
 }
@@ -56,8 +64,12 @@ func newTestClient(t *testing.T) *Client {
 }
 
 func TestClient_New(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	t.Run("Success", func(t *testing.T) {
-		cli, err := New("bufnet",
+		cli, err := New(context.Background(), "bufnet",
 			grpc.WithContextDialer(bufDialer),
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 		)
@@ -67,15 +79,40 @@ func TestClient_New(t *testing.T) {
 	})
 
 	t.Run("InvalidAddress", func(t *testing.T) {
-		_, err := New("invalid-address",
+		_, err := New(context.Background(), "invalid-address",
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 		)
 
 		assert.Error(t, err)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("UnreachableAddress", func(t *testing.T) {
+		_, err := New(context.Background(), "localhost:2333",
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
 	})
 }
 
+func TestClient_New_NoTimeout(t *testing.T) {
+	cli, err := New(context.Background(), "bufnet",
+		grpc.WithContextDialer(bufDialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, cli)
+	assert.NoError(t, cli.Close())
+}
+
 func TestClient_GetSet(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	cli := newTestClient(t)
 	defer cli.Close()
 	ctx := context.Background()
@@ -98,6 +135,10 @@ func TestClient_GetSet(t *testing.T) {
 }
 
 func TestClient_Del(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	cli := newTestClient(t)
 	defer cli.Close()
 	ctx := context.Background()
@@ -118,6 +159,10 @@ func TestClient_Del(t *testing.T) {
 }
 
 func TestClient_Search(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	cli := newTestClient(t)
 	defer cli.Close()
 	ctx := context.Background()
@@ -148,6 +193,10 @@ func TestClient_Search(t *testing.T) {
 }
 
 func TestClient_ExpireKey(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	cli := newTestClient(t)
 	defer cli.Close()
 	ctx := context.Background()
@@ -171,6 +220,10 @@ func TestClient_ExpireKey(t *testing.T) {
 }
 
 func TestClient_Reset(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	cli := newTestClient(t)
 	defer cli.Close()
 	ctx := context.Background()
@@ -195,11 +248,15 @@ func TestClient_Reset(t *testing.T) {
 }
 
 func TestClient_Close(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	cli := newTestClient(t)
 	assert.NoError(t, cli.Close())
 
 	// Verify connection is closed
 	_, _, err := cli.Get(context.Background(), testKey)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "connection closing")
+	assert.Contains(t, err.Error(), "connection is closing")
 }

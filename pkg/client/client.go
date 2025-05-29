@@ -6,6 +6,7 @@ import (
 
 	"github.com/lushenle/simple-cache/pkg/pb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -15,7 +16,7 @@ type Client struct {
 }
 
 // New creates a new client instance
-func New(addr string, opts ...grpc.DialOption) (*Client, error) {
+func New(ctx context.Context, addr string, opts ...grpc.DialOption) (*Client, error) {
 	defaultOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	}
@@ -27,10 +28,50 @@ func New(addr string, opts ...grpc.DialOption) (*Client, error) {
 		return nil, err
 	}
 
+	if err = waitForConnectionReady(ctx, conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
 	return &Client{
 		conn:   conn,
 		client: pb.NewCacheServiceClient(conn),
 	}, nil
+}
+
+func NewDefault(addr string, opts ...grpc.DialOption) (*Client, error) {
+	return New(context.Background(), addr, opts...)
+}
+
+// waitForConnectionReady waits for the connection to be ready
+// stateDiagram-v2
+// [*] --> IDLE
+// IDLE --> CONNECTING
+// CONNECTING --> READY: Connected
+// CONNECTING --> TRANSIENT_FAILURE: Failed
+// TRANSIENT_FAILURE --> CONNECTING: Retry
+// TRANSIENT_FAILURE --> SHUTDOWN: Close
+// READY --> IDLE: Timeout
+// READY --> SHUTDOWN: Close
+func waitForConnectionReady(ctx context.Context, conn *grpc.ClientConn) error {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+	}
+
+	// Check connection state
+	for {
+		state := conn.GetState()
+		if state == connectivity.Ready {
+			return nil
+		}
+
+		if !conn.WaitForStateChange(ctx, state) {
+			// Timeout or context canceled
+			return ctx.Err()
+		}
+	}
 }
 
 // Close closes the client connection
@@ -68,8 +109,17 @@ func (c *Client) Del(ctx context.Context, key string) (bool, error) {
 
 // Search searches for keys matching the pattern
 func (c *Client) Search(ctx context.Context, pattern string, isRegex bool) ([]string, error) {
+	// Set the match mode based on the isRegex flag
+	var mode pb.SearchRequest_MatchMode
+	if isRegex {
+		mode = pb.SearchRequest_REGEX
+	} else {
+		mode = pb.SearchRequest_WILDCARD
+	}
+
 	resp, err := c.client.Search(ctx, &pb.SearchRequest{
 		Pattern: pattern,
+		Mode:    mode,
 	})
 	if err != nil {
 		return nil, err
