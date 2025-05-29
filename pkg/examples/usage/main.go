@@ -11,7 +11,7 @@ import (
 
 func main() {
 	// Initialize the client
-	cli, err := client.New("localhost:5051", grpc.WithDefaultCallOptions(
+	cli, err := client.New(context.Background(), "localhost:5051", grpc.WithDefaultCallOptions(
 		grpc.MaxCallRecvMsgSize(1024*1024*10),
 	))
 	if err != nil {
