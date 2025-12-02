@@ -8,6 +8,7 @@ import (
 	"github.com/lushenle/simple-cache/pkg/cache"
 	"github.com/lushenle/simple-cache/pkg/log"
 	"github.com/lushenle/simple-cache/pkg/pb"
+	"github.com/lushenle/simple-cache/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap/zapcore"
 )
@@ -20,19 +21,27 @@ func TestGRPCServer(t *testing.T) {
 	srv := New(c)
 
 	t.Run("SetGet", func(t *testing.T) {
-		_, err := srv.Set(context.Background(), &pb.SetRequest{
+		val, err := utils.ConvertToAnyPB("value")
+		assert.Nil(t, err)
+
+		_, err = srv.Set(context.Background(), &pb.SetRequest{
 			Key:   "test",
-			Value: "value",
+			Value: val,
 		})
 		assert.Nil(t, err)
 
 		resp, err := srv.Get(context.Background(), &pb.GetRequest{Key: "test"})
 		assert.Nil(t, err)
-		assert.Equal(t, "value", resp.Value)
+		got, convErr := utils.FromAnyPB(resp.Value)
+		assert.Nil(t, convErr)
+		assert.Equal(t, "value", got)
 	})
 
 	t.Run("Search", func(t *testing.T) {
-		srv.Set(context.Background(), &pb.SetRequest{Key: "user:100", Value: "data"})
+		val, err := utils.ConvertToAnyPB("data")
+		assert.Nil(t, err)
+
+		srv.Set(context.Background(), &pb.SetRequest{Key: "user:100", Value: val})
 		resp, err := srv.Search(context.Background(), &pb.SearchRequest{
 			Pattern: "user:*",
 		})

@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"reflect"
 	"time"
 
 	"github.com/lushenle/simple-cache/pkg/metrics"
@@ -15,9 +16,22 @@ func (c *Cache) updateSizeMetrics() {
 	count := len(c.items)
 	memSize := 0
 
+	// Helper function to calculate size of a value
+	valueSize := func(v any) int {
+		switch val := v.(type) {
+		case string:
+			return len(val)
+		case []byte:
+			return len(val)
+		default:
+			// For unsupported types, use reflection to get type size
+			return int(reflect.TypeOf(v).Size())
+		}
+	}
+
 	if count < 10000 {
 		for k, v := range c.items {
-			memSize += len(k) + len(v.value)
+			memSize += len(k) + valueSize(v.value)
 		}
 	} else {
 		sampleCount := count / 100
@@ -27,10 +41,16 @@ func (c *Cache) updateSizeMetrics() {
 		i := 0
 		for k, v := range c.items {
 			if i%sampleCount == 0 {
-				memSize += len(k) + len(v.value)
+				memSize += len(k) + valueSize(v.value)
 			}
 			i++
 		}
+
+		// Scale the memory size based on the sample count
+		// This is a rough estimate to avoid iterating through all items
+		// when the cache is large
+		// It assumes that the memory size is roughly proportional to the number of items
+		// This is a simplification and may not be accurate for all types of data
 		memSize = memSize * count / sampleCount
 	}
 

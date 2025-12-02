@@ -8,13 +8,16 @@ import (
 	"github.com/lushenle/simple-cache/pkg/command"
 	"github.com/lushenle/simple-cache/pkg/fsm"
 	"github.com/lushenle/simple-cache/pkg/pb"
+	"github.com/lushenle/simple-cache/pkg/raft"
+	"github.com/lushenle/simple-cache/pkg/utils"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 type CacheService struct {
 	pb.UnimplementedCacheServiceServer
-	fsm *fsm.FSM
+	fsm  *fsm.FSM
+	node *raft.Node
 }
 
 func New(c *cache.Cache) *CacheService {
@@ -23,9 +26,33 @@ func New(c *cache.Cache) *CacheService {
 	}
 }
 
+func (s *CacheService) UseRaft(n *raft.Node) {
+	s.node = n
+}
+
+func (s *CacheService) Apply(cmd interface{}) (interface{}, error) {
+	return s.fsm.Apply(cmd)
+}
+
+func (s *CacheService) Role() string {
+	if s.node == nil {
+		return "leader"
+	}
+	return string(s.node.Role())
+}
+
 func (s *CacheService) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
+	if s.node != nil && s.node.Role() != raft.Leader {
+		return nil, status.Error(codes.FailedPrecondition, "not leader")
+	}
 	value, found := s.fsm.Cache.Get(req.Key)
-	return &pb.GetResponse{Value: value, Found: found}, nil
+
+	val, err := utils.ConvertToAnyPB(value)
+	if err != nil {
+		return &pb.GetResponse{Value: nil, Found: false}, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	return &pb.GetResponse{Value: val, Found: found}, nil
 }
 
 func (s *CacheService) Set(ctx context.Context, req *pb.SetRequest) (*pb.SetResponse, error) {
@@ -34,7 +61,13 @@ func (s *CacheService) Set(ctx context.Context, req *pb.SetRequest) (*pb.SetResp
 		Value:  req.Value,
 		Expire: req.Expire,
 	}
-	resp, err := s.fsm.Apply(cmd)
+	var resp interface{}
+	var err error
+	if s.node != nil {
+		resp, err = s.node.Submit(cmd)
+	} else {
+		resp, err = s.fsm.Apply(cmd)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +76,13 @@ func (s *CacheService) Set(ctx context.Context, req *pb.SetRequest) (*pb.SetResp
 
 func (s *CacheService) Del(ctx context.Context, req *pb.DelRequest) (*pb.DelResponse, error) {
 	cmd := &command.DelCommand{Key: req.Key}
-	resp, err := s.fsm.Apply(cmd)
+	var resp interface{}
+	var err error
+	if s.node != nil {
+		resp, err = s.node.Submit(cmd)
+	} else {
+		resp, err = s.fsm.Apply(cmd)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +91,13 @@ func (s *CacheService) Del(ctx context.Context, req *pb.DelRequest) (*pb.DelResp
 
 func (s *CacheService) ExpireKey(ctx context.Context, req *pb.ExpireKeyRequest) (*pb.ExpireKeyResponse, error) {
 	cmd := &command.ExpireKeyCommand{Key: req.Key}
-	resp, err := s.fsm.Apply(cmd)
+	var resp interface{}
+	var err error
+	if s.node != nil {
+		resp, err = s.node.Submit(cmd)
+	} else {
+		resp, err = s.fsm.Apply(cmd)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +106,13 @@ func (s *CacheService) ExpireKey(ctx context.Context, req *pb.ExpireKeyRequest) 
 
 func (s *CacheService) Reset(ctx context.Context, req *pb.ResetRequest) (*pb.ResetResponse, error) {
 	cmd := &command.ResetCommand{}
-	resp, err := s.fsm.Apply(cmd)
+	var resp interface{}
+	var err error
+	if s.node != nil {
+		resp, err = s.node.Submit(cmd)
+	} else {
+		resp, err = s.fsm.Apply(cmd)
+	}
 	if err != nil {
 		return nil, err
 	}

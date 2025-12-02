@@ -11,7 +11,7 @@ import (
 )
 
 type Item struct {
-	value      string
+	value      any
 	expiration time.Time
 }
 

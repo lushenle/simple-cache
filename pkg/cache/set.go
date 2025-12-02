@@ -8,7 +8,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func (c *Cache) Set(key, value string, expire string) error {
+func (c *Cache) Set(key string, value any, expire string) error {
 	c.logger.Info("set", zap.String("key", key))
 
 	start := time.Now()

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/lushenle/simple-cache/pkg/pb"
+	"github.com/lushenle/simple-cache/pkg/utils"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
@@ -20,21 +22,22 @@ type Client struct {
 // New creates a new client instance
 func New(ctx context.Context, addr string, opts ...grpc.DialOption) (*Client, error) {
 	defaultOpts := []grpc.DialOption{
-		grpc.WithBlock(),
-		grpc.WithReturnConnectionError(),
-		grpc.WithDisableRetry(),
-		grpc.WithTimeout(10 * time.Second),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: 5 * time.Second}),
 	}
 
 	opts = append(defaultOpts, opts...)
 
-	conn, err := grpc.DialContext(ctx, addr, opts...)
+	target := addr
+	if !strings.Contains(addr, "://") {
+		target = "passthrough:///" + addr
+	}
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	if err = waitForConnectionReady(ctx, conn); err != nil {
+	if err = ensureConnected(ctx, conn); err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -49,7 +52,7 @@ func NewDefault(addr string, opts ...grpc.DialOption) (*Client, error) {
 	return New(context.Background(), addr, opts...)
 }
 
-// waitForConnectionReady waits for the connection to be ready
+// ensureConnected optionally validates connection readiness following gRPC best practices.
 // stateDiagram-v2
 // [*] --> IDLE
 // IDLE --> CONNECTING
@@ -59,7 +62,7 @@ func NewDefault(addr string, opts ...grpc.DialOption) (*Client, error) {
 // TRANSIENT_FAILURE --> SHUTDOWN: Close
 // READY --> IDLE: Timeout
 // READY --> SHUTDOWN: Close
-func waitForConnectionReady(ctx context.Context, conn *grpc.ClientConn) error {
+func ensureConnected(ctx context.Context, conn *grpc.ClientConn) error {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
@@ -69,6 +72,9 @@ func waitForConnectionReady(ctx context.Context, conn *grpc.ClientConn) error {
 	// Check connection state
 	for {
 		state := conn.GetState()
+		if state == connectivity.Idle {
+			conn.Connect()
+		}
 		if state == connectivity.Ready {
 			return nil
 		}
@@ -86,19 +92,27 @@ func (c *Client) Close() error {
 }
 
 // Get gets a value by key
-func (c *Client) Get(ctx context.Context, key string) (string, bool, error) {
+func (c *Client) Get(ctx context.Context, key string) (any, bool, error) {
 	resp, err := c.client.Get(ctx, &pb.GetRequest{Key: key})
 	if err != nil {
 		return "", false, err
 	}
-	return resp.Value, resp.Found, nil
+	v, convErr := utils.FromAnyPB(resp.Value)
+	if convErr != nil {
+		return "", resp.Found, convErr
+	}
+	return v, resp.Found, nil
 }
 
 // Set sets a key-value pair
-func (c *Client) Set(ctx context.Context, key, value string, ttl time.Duration) error {
-	_, err := c.client.Set(ctx, &pb.SetRequest{
+func (c *Client) Set(ctx context.Context, key string, value any, ttl time.Duration) error {
+	val, err := utils.ConvertToAnyPB(value)
+	if err != nil {
+		return err
+	}
+	_, err = c.client.Set(ctx, &pb.SetRequest{
 		Key:    key,
-		Value:  value,
+		Value:  val,
 		Expire: formatTTL(ttl),
 	})
 	return err
@@ -178,12 +192,17 @@ func (c *Client) BatchSet(ctx context.Context, items map[string]string, ttl time
 	// TODO: Consider using a gRPC stream for batch operations if performance becomes an issue
 	// for very large batches. For now, sequential calls are simpler.
 	for key, value := range items {
+		val, err := utils.ConvertToAnyPB(value)
+		if err != nil {
+			return err
+		}
+
 		req := &pb.SetRequest{
 			Key:    key,
-			Value:  value,
+			Value:  val,
 			Expire: formattedTTL,
 		}
-		_, err := c.client.Set(ctx, req)
+		_, err = c.client.Set(ctx, req)
 		if err != nil {
 			// Return the first error encountered.
 			// Depending on requirements, one might want to collect all errors

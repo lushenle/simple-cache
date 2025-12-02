@@ -97,7 +97,7 @@ service CacheService {
       };
   }
 
-  rpc ExpireKey(ExpireKeyRequest) returns (ExpireKeyResponse){
+  rpc ExpireKey(ExpireKeyRequest) returns (ExpireKeyResponse) {
       option (google.api.http) = {
           post: "/v1/{key=*}/expire"
       };
