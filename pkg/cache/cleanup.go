@@ -3,6 +3,8 @@ package cache
 import (
 	"container/heap"
 	"time"
+
+	"github.com/lushenle/simple-cache/pkg/metrics"
 )
 
 func (c *Cache) cleanupWorker() {
@@ -46,6 +48,7 @@ func (c *Cache) cleanupExpired() {
 			if item.expiration.Equal(entry.expiration) {
 				c.delInternal(entry.key)
 			}
+			metrics.UpdateExpirationHeapSize(c.expirationHeap.Len())
 		}
 	}
 }
