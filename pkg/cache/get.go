@@ -7,7 +7,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func (c *Cache) Get(key string) (string, bool) {
+func (c *Cache) Get(key string) (any, bool) {
 	c.logger.Info("get", zap.String("key", key))
 
 	start := time.Now()
@@ -34,7 +34,7 @@ func (c *Cache) Get(key string) (string, bool) {
 	return item.value, success
 }
 
-func (c *Cache) handleExpiredKey(key string) (string, bool) {
+func (c *Cache) handleExpiredKey(key string) (any, bool) {
 	c.mu.Lock("write")
 	defer c.mu.Unlock()
 

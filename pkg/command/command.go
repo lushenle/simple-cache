@@ -3,6 +3,7 @@ package command
 import (
 	"github.com/lushenle/simple-cache/pkg/cache"
 	"github.com/lushenle/simple-cache/pkg/pb"
+	"github.com/lushenle/simple-cache/pkg/utils"
 )
 
 type Command interface {
@@ -11,7 +12,7 @@ type Command interface {
 
 type SetCommand struct {
 	Key    string
-	Value  string
+	Value  any
 	Expire string
 }
 
@@ -24,7 +25,13 @@ type GetCommand struct{ Key string }
 
 func (c *GetCommand) Apply(cache *cache.Cache) (interface{}, error) {
 	value, found := cache.Get(c.Key)
-	return &pb.GetResponse{Value: value, Found: found}, nil
+
+	val, err := utils.ConvertToAnyPB(value)
+	if err != nil {
+		return &pb.GetResponse{Value: nil, Found: false}, err
+	}
+
+	return &pb.GetResponse{Value: val, Found: found}, nil
 }
 
 type DelCommand struct{ Key string }

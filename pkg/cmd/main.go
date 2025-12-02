@@ -11,9 +11,11 @@ import (
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/lushenle/simple-cache/pkg/cache"
+	"github.com/lushenle/simple-cache/pkg/config"
 	"github.com/lushenle/simple-cache/pkg/log"
 	"github.com/lushenle/simple-cache/pkg/metrics"
 	"github.com/lushenle/simple-cache/pkg/pb"
+	"github.com/lushenle/simple-cache/pkg/raft"
 	"github.com/lushenle/simple-cache/pkg/server"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
@@ -38,14 +40,28 @@ func main() {
 	plugin := log.NewStdoutPlugin(zapcore.DebugLevel)
 	logger := log.NewLogger(plugin)
 
-	// Create a new gRPC server and listen on port 50051
+	cfg, _ := config.Load("config.yaml")
+	acfg := config.NewAtomic(cfg)
+	stop := make(chan struct{})
+	if cfg.HotReload {
+		w := config.NewWatcher("config.yaml", acfg)
+		go w.Start(stop)
+	}
+
+	// Create a new gRPC server
 	c := cache.New(30*time.Second, logger)
 	srv := server.New(c)
+
+	if cfg.Mode == "distributed" {
+		st := raft.NewStorage("data/raft-" + cfg.NodeID + ".wal")
+		n := raft.NewNode(cfg.NodeID, cfg.RaftHTTPAddr, cfg.Peers, st, srv, time.Duration(cfg.HeartbeatMS)*time.Millisecond, time.Duration(cfg.ElectionMS)*time.Millisecond)
+		srv.UseRaft(n)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	waitGroup, ctx := errgroup.WithContext(ctx)
 	waitGroup.Go(func() error {
-		runGatewayServer(ctx, waitGroup, srv, logger)
+		runGatewayServer(ctx, waitGroup, srv, logger, acfg)
 		return nil
 	})
 	waitGroup.Go(func() error {
@@ -55,13 +71,13 @@ func main() {
 	})
 
 	// Start the gRPC server
-	lis, _ := net.Listen("tcp", ":5051")
+	lis, _ := net.Listen("tcp", cfg.GRPCAddr)
 	grpcServer := grpc.NewServer()
 	pb.RegisterCacheServiceServer(grpcServer, srv)
 	grpcServer.Serve(lis)
 }
 
-func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *server.CacheService, logger *zap.Logger) {
+func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *server.CacheService, logger *zap.Logger, cfg *config.AtomicConfig) {
 	jsonOption := runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.JSONPb{
 		MarshalOptions: protojson.MarshalOptions{
 			UseProtoNames: true,
@@ -80,6 +96,14 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 
 	mux := http.NewServeMux()
 	mux.Handle("/", grpcMux)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(svr.Role()))
+	})
 
 	// Access the embedded 'swagger' folder.
 	swaggerFS, err := fs.Sub(content, "swagger")
@@ -113,7 +137,7 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 
 	httpServer := &http.Server{
 		Handler: handler,
-		Addr:    ":8080",
+		Addr:    cfg.Get().HTTPAddr,
 	}
 
 	waitGroup.Go(func() error {
