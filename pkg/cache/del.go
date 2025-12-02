@@ -34,10 +34,12 @@ func (c *Cache) delInternal(key string) {
 	for i, entry := range *c.expirationHeap {
 		if entry.key == key {
 			heap.Remove(c.expirationHeap, i)
+			metrics.UpdateExpirationHeapSize(c.expirationHeap.Len())
 			break
 		}
 	}
 
 	delete(c.items, key)
 	c.prefixTree.Delete(key)
+	metrics.UpdateKeysTotal(len(c.items))
 }

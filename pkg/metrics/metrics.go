@@ -13,6 +13,38 @@ type InstrumentedRWMutex struct {
 }
 
 var (
+	// New metrics per docs/monitoring.md
+	RequestsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "simple_cache_requests_total",
+			Help: "Total number of cache requests",
+		},
+		[]string{"op", "status"},
+	)
+
+	RequestDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "simple_cache_request_duration_seconds",
+			Help:    "Latency of cache requests",
+			Buckets: prometheus.ExponentialBuckets(1e-5, 2, 15),
+		},
+		[]string{"op"},
+	)
+
+	KeysTotal = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "simple_cache_keys_total",
+			Help: "Total number of keys in cache",
+		},
+	)
+
+	ExpirationHeapSize = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "simple_cache_expiration_heap_size",
+			Help: "Number of entries in expiration heap",
+		},
+	)
+
 	// OperationDuration latency metrics
 	OperationDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -56,15 +88,62 @@ var (
 		},
 		[]string{"op_type"}, // read/write
 	)
+
+	// Raft metrics
+	RaftRole = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "raft_role",
+			Help: "Current Raft role of node (label 'role' set to 1 for current role)",
+		},
+		[]string{"node_id", "role"},
+	)
+
+	RaftCommitIndex = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "raft_commit_index",
+			Help: "Current Raft commit index",
+		},
+	)
+
+	RaftLastApplied = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "raft_last_applied",
+			Help: "Last applied log index",
+		},
+	)
+
+	RaftLeaderChanges = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "raft_leader_changes_total",
+			Help: "Total leader role changes",
+		},
+	)
+
+	RaftAppendEntriesLatency = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "raft_append_entries_latency_seconds",
+			Help:    "Latency of AppendEntries broadcast",
+			Buckets: prometheus.ExponentialBuckets(1e-4, 2, 15),
+		},
+	)
 )
 
 func Init() {
 	prometheus.MustRegister(
+		RequestsTotal,
+		RequestDuration,
+		KeysTotal,
+		ExpirationHeapSize,
 		OperationDuration,
 		OperationCount,
 		CacheSize,
 		MemoryUsage,
 		MutexWait,
+		RaftRole,
+		RaftCommitIndex,
+		RaftLastApplied,
+		RaftLeaderChanges,
+		RaftAppendEntriesLatency,
 	)
 
 	go updateMemoryUsage()
@@ -84,6 +163,7 @@ func updateMemoryUsage() {
 
 func ObserveOperation(duration time.Duration, opType string) {
 	OperationDuration.WithLabelValues(opType).Observe(duration.Seconds())
+	RequestDuration.WithLabelValues(opType).Observe(duration.Seconds())
 }
 
 func IncOperation(opType string, success bool) {
@@ -93,7 +173,27 @@ func IncOperation(opType string, success bool) {
 	}
 
 	OperationCount.WithLabelValues(opType, status).Inc()
+	RequestsTotal.WithLabelValues(opType, status).Inc()
 }
+
+func UpdateKeysTotal(n int) {
+	KeysTotal.Set(float64(n))
+}
+
+func UpdateExpirationHeapSize(n int) {
+	ExpirationHeapSize.Set(float64(n))
+}
+
+// Raft helpers
+func SetRaftRole(nodeID, role string) {
+	// Set 1 for current role; other role series are not touched here
+	RaftRole.WithLabelValues(nodeID, role).Set(1)
+}
+
+func SetRaftCommitIndex(v uint64)                 { RaftCommitIndex.Set(float64(v)) }
+func SetRaftLastApplied(v uint64)                 { RaftLastApplied.Set(float64(v)) }
+func IncRaftLeaderChanges()                       { RaftLeaderChanges.Inc() }
+func ObserveAppendEntriesLatency(d time.Duration) { RaftAppendEntriesLatency.Observe(d.Seconds()) }
 
 func (m *InstrumentedRWMutex) Lock(opType string) {
 	start := time.Now()

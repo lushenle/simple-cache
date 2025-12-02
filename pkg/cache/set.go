@@ -40,6 +40,7 @@ func (c *Cache) Set(key string, value any, expire string) error {
 			key:        key,
 			expiration: expiration,
 		})
+		metrics.UpdateExpirationHeapSize(c.expirationHeap.Len())
 	}
 
 	c.setInternal(key, &Item{
@@ -53,6 +54,7 @@ func (c *Cache) Set(key string, value any, expire string) error {
 	itemPool.Put(item)
 
 	c.updateSizeMetrics()
+	metrics.UpdateKeysTotal(len(c.items))
 
 	return nil
 }

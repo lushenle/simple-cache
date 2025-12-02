@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"sync/atomic"
 	"time"
+
+	"github.com/lushenle/simple-cache/pkg/metrics"
 )
 
 type Applier interface {
@@ -27,6 +29,7 @@ type Node struct {
 func NewNode(id string, addr string, peers []string, storage *Storage, applier Applier, heartbeat, election time.Duration) *Node {
 	n := &Node{id: id, storage: storage, applier: applier, hb: heartbeat, el: election}
 	n.role.Store(Leader)
+	metrics.SetRaftRole(n.id, string(Leader))
 	n.leaderID.Store("")
 	n.trans = NewHTTPTransport(addr, peers)
 	n.trans.Start(n)
@@ -41,8 +44,10 @@ func (n *Node) loop() {
 	defer ticker.Stop()
 	for range ticker.C {
 		if n.Role() == Leader {
+			start := time.Now()
 			req := AppendEntriesReq{Term: n.term, LeaderID: n.id, CommitIdx: n.commitIdx}
 			n.trans.broadcastAppend(req)
+			metrics.ObserveAppendEntriesLatency(time.Since(start))
 		}
 	}
 }
@@ -55,21 +60,31 @@ func (n *Node) Submit(cmd interface{}) (interface{}, error) {
 	if err := n.storage.Append(b); err != nil {
 		return nil, err
 	}
+	start := time.Now()
 	ack := n.trans.broadcastAppend(AppendEntriesReq{Term: n.term, LeaderID: n.id, Entries: [][]byte{b}, CommitIdx: n.commitIdx + 1})
+	metrics.ObserveAppendEntriesLatency(time.Since(start))
 	if ack < 1 {
 		return nil, ErrCommit{}
 	}
 	n.commitIdx++
+	metrics.SetRaftCommitIndex(n.commitIdx)
 	return n.applier.Apply(cmd)
 }
 
 func (n *Node) onAppendEntries(req AppendEntriesReq) AppendEntriesResp {
 	n.leaderID.Store(req.LeaderID)
+	prev := n.Role()
+	if prev != Follower {
+		metrics.IncRaftLeaderChanges()
+	}
 	n.role.Store(Follower)
+	metrics.SetRaftRole(n.id, string(Follower))
 	for _, e := range req.Entries {
 		_ = n.storage.Append(e)
 	}
 	n.commitIdx = req.CommitIdx
+	metrics.SetRaftCommitIndex(n.commitIdx)
+	metrics.SetRaftLastApplied(n.commitIdx)
 	return AppendEntriesResp{Term: n.term, Success: true}
 }
 
