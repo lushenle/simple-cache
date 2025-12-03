@@ -41,6 +41,27 @@ func (s *CacheService) Role() string {
 	return string(s.node.Role())
 }
 
+func (s *CacheService) AddPeer(addr string) bool {
+	if s.node == nil {
+		return false
+	}
+	return s.node.AddPeer(addr)
+}
+
+func (s *CacheService) RemovePeer(addr string) bool {
+	if s.node == nil {
+		return false
+	}
+	return s.node.RemovePeer(addr)
+}
+
+func (s *CacheService) Peers() []string {
+	if s.node == nil {
+		return nil
+	}
+	return s.node.Peers()
+}
+
 func (s *CacheService) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
 	if s.node != nil && s.node.Role() != raft.Leader {
 		return nil, status.Error(codes.FailedPrecondition, "not leader")

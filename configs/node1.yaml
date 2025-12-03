@@ -1,10 +1,13 @@
-mode: single
-node_id: node-1
+mode: distributed
+node_id: n1
 grpc_addr: ":5051"
 http_addr: ":8080"
 raft_http_addr: ":9090"
 metrics_addr: ":2112"
-peers: []
+peers:
+  - "http://127.0.0.1:9090"
+  - "http://127.0.0.1:9091"
+  - "http://127.0.0.1:9092"
 heartbeat_ms: 200
 election_ms: 1200
 hot_reload: false

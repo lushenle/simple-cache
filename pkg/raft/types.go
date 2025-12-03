@@ -21,8 +21,10 @@ type AppendEntriesResp struct {
 }
 
 type RequestVoteReq struct {
-	Term        uint64
-	CandidateID string
+	Term         uint64
+	CandidateID  string
+	LastLogIndex uint64
+	LastLogTerm  uint64
 }
 
 type RequestVoteResp struct {

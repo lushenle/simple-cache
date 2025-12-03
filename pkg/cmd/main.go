@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
@@ -33,28 +35,31 @@ func main() {
 	// Initialize Prometheus metrics
 	metrics.Init()
 
-	// Start Prometheus HTTP server
-	http.Handle("/metrics", promhttp.Handler())
-	go http.ListenAndServe(":2112", nil)
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.Handler())
 
-	plugin := log.NewStdoutPlugin(zapcore.DebugLevel)
+	plugin := log.NewStdoutPlugin(zapcore.InfoLevel)
 	logger := log.NewLogger(plugin)
 
-	cfg, _ := config.Load("config.yaml")
+	cfgPath := "config.yaml"
+	if p := os.Getenv("CONFIG_PATH"); p != "" {
+		cfgPath = p
+	}
+	cfg, _ := config.Load(cfgPath)
 	acfg := config.NewAtomic(cfg)
 	stop := make(chan struct{})
 	if cfg.HotReload {
 		w := config.NewWatcher("config.yaml", acfg)
 		go w.Start(stop)
 	}
-
+	go http.ListenAndServe(cfg.MetricsAddr, metricsMux)
 	// Create a new gRPC server
 	c := cache.New(30*time.Second, logger)
 	srv := server.New(c)
 
 	if cfg.Mode == "distributed" {
 		st := raft.NewStorage("data/raft-" + cfg.NodeID + ".wal")
-		n := raft.NewNode(cfg.NodeID, cfg.RaftHTTPAddr, cfg.Peers, st, srv, time.Duration(cfg.HeartbeatMS)*time.Millisecond, time.Duration(cfg.ElectionMS)*time.Millisecond)
+		n := raft.NewNode(cfg.NodeID, cfg.RaftHTTPAddr, cfg.Peers, st, srv, time.Duration(cfg.HeartbeatMS)*time.Millisecond, time.Duration(cfg.ElectionMS)*time.Millisecond, logger)
 		srv.UseRaft(n)
 	}
 
@@ -103,6 +108,56 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(svr.Role()))
+	})
+
+	mux.HandleFunc("/cluster/join", func(w http.ResponseWriter, r *http.Request) {
+		type req struct {
+			ID   string `json:"id"`
+			Addr string `json:"addr"`
+		}
+		var in req
+		dec := json.NewDecoder(r.Body)
+		_ = dec.Decode(&in)
+		if in.Addr == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("missing addr"))
+			return
+		}
+		ok := svr.AddPeer(in.Addr)
+		if !ok {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte("exists"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("joined"))
+	})
+	mux.HandleFunc("/cluster/leave", func(w http.ResponseWriter, r *http.Request) {
+		type req struct {
+			Addr string `json:"addr"`
+		}
+		var in req
+		dec := json.NewDecoder(r.Body)
+		_ = dec.Decode(&in)
+		if in.Addr == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("missing addr"))
+			return
+		}
+		ok := svr.RemovePeer(in.Addr)
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte("not found"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("left"))
+	})
+	mux.HandleFunc("/cluster/peers", func(w http.ResponseWriter, r *http.Request) {
+		out, _ := json.Marshal(svr.Peers())
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(out)
 	})
 
 	// Access the embedded 'swagger' folder.
@@ -157,7 +212,7 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 		<-ctx.Done()
 		logger.Info("graceful shutdown HTTP gateway server", zap.String("addr", httpServer.Addr))
 
-		err = httpServer.Shutdown(context.Background())
+		err = httpServer.Shutdown(ctx)
 		if err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
 				logger.Fatal("failed to shutdown HTTP server", zap.Error(err))

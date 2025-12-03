@@ -14,6 +14,7 @@ type Config struct {
 	GRPCAddr     string   `yaml:"grpc_addr"`
 	HTTPAddr     string   `yaml:"http_addr"`
 	RaftHTTPAddr string   `yaml:"raft_http_addr"`
+	MetricsAddr  string   `yaml:"metrics_addr"`
 	Peers        []string `yaml:"peers"`
 	HeartbeatMS  int      `yaml:"heartbeat_ms"`
 	ElectionMS   int      `yaml:"election_ms"`
@@ -27,6 +28,7 @@ func Default() *Config {
 		GRPCAddr:     ":5051",
 		HTTPAddr:     ":8080",
 		RaftHTTPAddr: ":9090",
+		MetricsAddr:  ":2112",
 		HeartbeatMS:  200,
 		ElectionMS:   1200,
 		HotReload:    false,
