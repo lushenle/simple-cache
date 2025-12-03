@@ -170,6 +170,8 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 	// Create a file server to serve the embedded content.
 	fileServer := http.FileServer(http.FS(swaggerFS))
 	mux.Handle("/swagger/", http.StripPrefix("/swagger", fileServer))
+	mux.Handle("/api/docs/", http.StripPrefix("/api/docs", fileServer))
+	mux.HandleFunc("/api/docs", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/api/docs/", http.StatusFound) })
 
 	c := cors.New(cors.Options{
 		AllowedOrigins: []string{"*"},

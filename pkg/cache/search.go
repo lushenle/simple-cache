@@ -12,17 +12,16 @@ import (
 func (c *Cache) Search(pattern string, useRegex bool) ([]string, error) {
 	c.logger.Info("search", zap.String("pattern", pattern))
 
-	c.mu.RLock("read")
+	c.mu.RLock(metrics.LockRead)
 	defer c.mu.RUnlock()
 
 	start := time.Now()
 	defer func() {
-		searchType := "wildcard"
+		op := metrics.OpSearchWildcard
 		if useRegex {
-			searchType = "regex"
+			op = metrics.OpSearchRegex
 		}
-
-		metrics.ObserveOperation(time.Since(start), searchType)
+		metrics.ObserveOperation(time.Since(start), op)
 	}()
 
 	if !useRegex && len(pattern) > 1 && pattern[len(pattern)-1] == '*' {

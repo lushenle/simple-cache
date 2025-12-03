@@ -279,7 +279,7 @@ func TestClient_Search(t *testing.T) {
 	})
 
 	t.Run("RegexSearch", func(t *testing.T) {
-		results, err := cli.Search(ctx, `^search-test-\d$`, true)
+		results, err := cli.Search(ctx, testPattern, true)
 		assert.NoError(t, err)
 		assert.ElementsMatch(t, []string{"search-test-1", "search-test-2"}, results)
 	})

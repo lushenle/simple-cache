@@ -13,18 +13,18 @@ func (c *Cache) Del(key string) bool {
 
 	start := time.Now()
 	defer func() {
-		metrics.ObserveOperation(time.Since(start), "del")
+		metrics.ObserveOperation(time.Since(start), metrics.OpDel)
 	}()
 
-	c.mu.Lock("write")
+	c.mu.Lock(metrics.LockWrite)
 	defer c.mu.Unlock()
 
 	_, existed := c.items[key]
 	if existed {
 		c.delInternal(key)
-		metrics.IncOperation("del", true)
+		metrics.IncOperation(metrics.OpDel, true)
 	} else {
-		metrics.IncOperation("del", false)
+		metrics.IncOperation(metrics.OpDel, false)
 	}
 
 	return existed

@@ -13,11 +13,11 @@ func (c *Cache) Get(key string) (any, bool) {
 	start := time.Now()
 	var success bool
 	defer func() {
-		metrics.ObserveOperation(time.Since(start), "get")
-		metrics.IncOperation("get", success)
+		metrics.ObserveOperation(time.Since(start), metrics.OpGet)
+		metrics.IncOperation(metrics.OpGet, success)
 	}()
 
-	c.mu.RLock("read")
+	c.mu.RLock(metrics.LockRead)
 	item, found := c.items[key]
 	if !found {
 		c.mu.RUnlock()
@@ -35,7 +35,7 @@ func (c *Cache) Get(key string) (any, bool) {
 }
 
 func (c *Cache) handleExpiredKey(key string) (any, bool) {
-	c.mu.Lock("write")
+	c.mu.Lock(metrics.LockWrite)
 	defer c.mu.Unlock()
 
 	// Double check after acquiring write lock

@@ -12,6 +12,28 @@ type InstrumentedRWMutex struct {
 	mu sync.RWMutex
 }
 
+type OpType string
+
+const (
+	OpGet             OpType = "get"
+	OpSet             OpType = "set"
+	OpDel             OpType = "del"
+	OpExpire          OpType = "expire"
+	OpReset           OpType = "reset"
+	OpSearch          OpType = "search"
+	OpSearchWildcard  OpType = "search_wildcard"
+	OpSearchRegex     OpType = "search_regex"
+	OpSizeCalculation OpType = "size_calculation"
+	OpCleanup         OpType = "cleanup"
+)
+
+type LockOp string
+
+const (
+	LockRead  LockOp = "read"
+	LockWrite LockOp = "write"
+)
+
 var (
 	// New metrics per docs/monitoring.md
 	RequestsTotal = prometheus.NewCounterVec(
@@ -169,19 +191,19 @@ func updateMemoryUsage() {
 	}
 }
 
-func ObserveOperation(duration time.Duration, opType string) {
-	OperationDuration.WithLabelValues(opType).Observe(duration.Seconds())
-	RequestDuration.WithLabelValues(opType).Observe(duration.Seconds())
+func ObserveOperation(duration time.Duration, opType OpType) {
+	OperationDuration.WithLabelValues(string(opType)).Observe(duration.Seconds())
+	RequestDuration.WithLabelValues(string(opType)).Observe(duration.Seconds())
 }
 
-func IncOperation(opType string, success bool) {
+func IncOperation(opType OpType, success bool) {
 	status := "success"
 	if !success {
 		status = "failure"
 	}
 
-	OperationCount.WithLabelValues(opType, status).Inc()
-	RequestsTotal.WithLabelValues(opType, status).Inc()
+	OperationCount.WithLabelValues(string(opType), status).Inc()
+	RequestsTotal.WithLabelValues(string(opType), status).Inc()
 }
 
 func UpdateKeysTotal(n int) {
@@ -204,22 +226,22 @@ func IncRaftLeaderChanges()                       { RaftLeaderChanges.Inc() }
 func ObserveAppendEntriesLatency(d time.Duration) { RaftAppendEntriesLatency.Observe(d.Seconds()) }
 func SetPeersTotal(n int)                         { PeersTotal.Set(float64(n)) }
 
-func (m *InstrumentedRWMutex) Lock(opType string) {
+func (m *InstrumentedRWMutex) Lock(opType LockOp) {
 	start := time.Now()
 	m.mu.Lock()
 	duration := time.Since(start)
-	MutexWait.WithLabelValues(opType).Observe(duration.Seconds())
+	MutexWait.WithLabelValues(string(opType)).Observe(duration.Seconds())
 }
 
 func (m *InstrumentedRWMutex) Unlock() {
 	m.mu.Unlock()
 }
 
-func (m *InstrumentedRWMutex) RLock(opType string) {
+func (m *InstrumentedRWMutex) RLock(opType LockOp) {
 	start := time.Now()
 	m.mu.RLock()
 	duration := time.Since(start)
-	MutexWait.WithLabelValues(opType).Observe(duration.Seconds())
+	MutexWait.WithLabelValues(string(opType)).Observe(duration.Seconds())
 }
 
 func (m *InstrumentedRWMutex) RUnlock() {

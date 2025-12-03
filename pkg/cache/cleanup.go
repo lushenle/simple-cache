@@ -12,12 +12,14 @@ func (c *Cache) cleanupWorker() {
 
 	defer c.wg.Done()
 
-	ticker := time.NewTicker(c.cleanupInterval)
-	defer ticker.Stop()
-
 	for {
+		delay := c.nextCleanupDelay()
+		if delay <= 0 {
+			c.cleanupExpired()
+			delay = c.nextCleanupDelay()
+		}
 		select {
-		case <-ticker.C:
+		case <-time.After(delay):
 			c.cleanupExpired()
 		case <-c.stopChan:
 			return
@@ -28,12 +30,18 @@ func (c *Cache) cleanupWorker() {
 func (c *Cache) cleanupExpired() {
 	c.logger.Info("starting cleanup expired")
 
+	start := time.Now()
+	budget := c.cleanupInterval / 20
+	if budget <= 0 {
+		budget = 5 * time.Millisecond
+	}
+
 	c.mu.Lock("write")
 	defer c.mu.Unlock()
 
 	now := time.Now()
-
-	for i := 0; i < 1000; i++ {
+	processed := 0
+	for processed < 2000 && time.Since(start) < budget {
 		if c.expirationHeap.Len() == 0 {
 			break
 		}
@@ -47,8 +55,27 @@ func (c *Cache) cleanupExpired() {
 		if item, exists := c.items[entry.key]; exists {
 			if item.expiration.Equal(entry.expiration) {
 				c.delInternal(entry.key)
+				processed++
 			}
-			metrics.UpdateExpirationHeapSize(c.expirationHeap.Len())
 		}
 	}
+	metrics.UpdateExpirationHeapSize(c.expirationHeap.Len())
+	metrics.ObserveOperation(time.Since(start), metrics.OpCleanup)
+}
+
+func (c *Cache) nextCleanupDelay() time.Duration {
+	delay := c.cleanupInterval
+	c.mu.RLock("read")
+	if c.expirationHeap.Len() > 0 {
+		next := (*c.expirationHeap)[0].expiration
+		until := time.Until(next)
+		if until > 0 && until < delay {
+			delay = until
+		}
+	}
+	c.mu.RUnlock()
+	if delay <= 0 {
+		delay = 100 * time.Millisecond
+	}
+	return delay
 }

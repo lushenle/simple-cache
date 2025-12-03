@@ -14,8 +14,8 @@ func (c *Cache) Set(key string, value any, expire string) error {
 	start := time.Now()
 	var success bool
 	defer func() {
-		metrics.ObserveOperation(time.Since(start), "set")
-		metrics.IncOperation("set", success)
+		metrics.ObserveOperation(time.Since(start), metrics.OpSet)
+		metrics.IncOperation(metrics.OpSet, success)
 	}()
 
 	// Acquire an item from the pool
@@ -32,7 +32,7 @@ func (c *Cache) Set(key string, value any, expire string) error {
 		expiration = time.Now().Add(duration)
 	}
 
-	c.mu.Lock("write")
+	c.mu.Lock(metrics.LockWrite)
 	defer c.mu.Unlock()
 
 	if !expiration.IsZero() {
@@ -49,9 +49,6 @@ func (c *Cache) Set(key string, value any, expire string) error {
 	})
 
 	success = true
-
-	// Release the item back to the pool
-	itemPool.Put(item)
 
 	c.updateSizeMetrics()
 	metrics.UpdateKeysTotal(len(c.items))

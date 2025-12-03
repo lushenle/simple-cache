@@ -10,7 +10,7 @@ import (
 func (c *Cache) updateSizeMetrics() {
 	start := time.Now()
 	defer func() {
-		metrics.ObserveOperation(time.Since(start), "size_calculation")
+		metrics.ObserveOperation(time.Since(start), metrics.OpSizeCalculation)
 	}()
 
 	count := len(c.items)
