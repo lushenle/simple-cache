@@ -1,0 +1,13 @@
+mode: distributed
+node_id: n2
+grpc_addr: ":5052"
+http_addr: ":8081"
+raft_http_addr: ":9091"
+metrics_addr: ":2113"
+peers:
+  - "http://127.0.0.1:9090"
+  - "http://127.0.0.1:9091"
+  - "http://127.0.0.1:9092"
+heartbeat_ms: 200
+election_ms: 1200
+hot_reload: false

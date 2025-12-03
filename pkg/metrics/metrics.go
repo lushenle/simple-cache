@@ -126,6 +126,13 @@ var (
 			Buckets: prometheus.ExponentialBuckets(1e-4, 2, 15),
 		},
 	)
+
+	PeersTotal = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "simple_cache_peers_total",
+			Help: "Number of peers in the raft cluster",
+		},
+	)
 )
 
 func Init() {
@@ -144,6 +151,7 @@ func Init() {
 		RaftLastApplied,
 		RaftLeaderChanges,
 		RaftAppendEntriesLatency,
+		PeersTotal,
 	)
 
 	go updateMemoryUsage()
@@ -194,6 +202,7 @@ func SetRaftCommitIndex(v uint64)                 { RaftCommitIndex.Set(float64(
 func SetRaftLastApplied(v uint64)                 { RaftLastApplied.Set(float64(v)) }
 func IncRaftLeaderChanges()                       { RaftLeaderChanges.Inc() }
 func ObserveAppendEntriesLatency(d time.Duration) { RaftAppendEntriesLatency.Observe(d.Seconds()) }
+func SetPeersTotal(n int)                         { PeersTotal.Set(float64(n)) }
 
 func (m *InstrumentedRWMutex) Lock(opType string) {
 	start := time.Now()
