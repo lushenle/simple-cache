@@ -6,6 +6,7 @@ option go_package = "github.com/lushenle/simple-cache/pkg/pb";
 
 message ExpireKeyRequest {
   string key = 1;
+  string expire = 2;
 }
 
 message ExpireKeyResponse {

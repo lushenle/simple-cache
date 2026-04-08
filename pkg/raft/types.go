@@ -9,10 +9,12 @@ const (
 )
 
 type AppendEntriesReq struct {
-	Term      uint64
-	LeaderID  string
-	Entries   [][]byte
-	CommitIdx uint64
+	Term         uint64
+	LeaderID     string
+	PrevLogIndex uint64
+	PrevLogTerm  uint64
+	Entries      [][]byte
+	CommitIdx    uint64
 }
 
 type AppendEntriesResp struct {

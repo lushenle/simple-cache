@@ -111,7 +111,7 @@ func (s *CacheService) Del(ctx context.Context, req *pb.DelRequest) (*pb.DelResp
 }
 
 func (s *CacheService) ExpireKey(ctx context.Context, req *pb.ExpireKeyRequest) (*pb.ExpireKeyResponse, error) {
-	cmd := &command.ExpireKeyCommand{Key: req.Key}
+	cmd := &command.ExpireKeyCommand{Key: req.Key, Expire: req.Expire}
 	var resp interface{}
 	var err error
 	if s.node != nil {

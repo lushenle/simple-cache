@@ -15,17 +15,13 @@ type Item struct {
 	expiration time.Time
 }
 
-// itemPool for reusing Item instances
-var itemPool = sync.Pool{
-	New: func() interface{} { return new(Item) },
-}
-
 type Cache struct {
 	mu         *metrics.InstrumentedRWMutex
 	items      map[string]*Item
 	prefixTree *radix.Tree // Prefix tree for keys
 
 	expirationHeap  *ExpirationHeap
+	expirationIndex map[string]int // key -> heap index for O(log n) deletion
 	stopChan        chan struct{}
 	cleanupInterval time.Duration
 	wg              sync.WaitGroup
@@ -43,9 +39,15 @@ func New(cleanupInterval time.Duration, logger *zap.Logger) *Cache {
 		items:           make(map[string]*Item),
 		prefixTree:      radix.New(),
 		expirationHeap:  &ExpirationHeap{},
+		expirationIndex: make(map[string]int),
 		stopChan:        make(chan struct{}),
 		cleanupInterval: cleanupInterval,
 		logger:          logger,
+	}
+
+	// Set up index tracking callback so expirationIndex stays in sync with heap swaps
+	c.expirationHeap.onSwap = func(key string, newIndex int) {
+		c.expirationIndex[key] = newIndex
 	}
 
 	heap.Init(c.expirationHeap)

@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
@@ -45,22 +47,34 @@ func main() {
 	if p := os.Getenv("CONFIG_PATH"); p != "" {
 		cfgPath = p
 	}
-	cfg, _ := config.Load(cfgPath)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		logger.Fatal("failed to load config", zap.Error(err), zap.String("path", cfgPath))
+	}
 	acfg := config.NewAtomic(cfg)
 	stop := make(chan struct{})
 	if cfg.HotReload {
-		w := config.NewWatcher("config.yaml", acfg)
+		w := config.NewWatcher(cfgPath, acfg) // Fix: use cfgPath instead of hardcoded "config.yaml"
 		go w.Start(stop)
 	}
-	go http.ListenAndServe(cfg.MetricsAddr, metricsMux)
+
+	metricsServer := &http.Server{Addr: cfg.MetricsAddr, Handler: metricsMux}
+	go func() {
+		logger.Info("starting metrics server", zap.String("addr", cfg.MetricsAddr))
+		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("metrics server failed", zap.Error(err))
+		}
+	}()
+
 	// Create a new gRPC server
 	c := cache.New(30*time.Second, logger)
 	srv := server.New(c)
 
+	var raftNode *raft.Node
 	if cfg.Mode == "distributed" {
 		st := raft.NewStorage("data/raft-" + cfg.NodeID + ".wal")
-		n := raft.NewNode(cfg.NodeID, cfg.RaftHTTPAddr, cfg.Peers, st, srv, time.Duration(cfg.HeartbeatMS)*time.Millisecond, time.Duration(cfg.ElectionMS)*time.Millisecond, logger)
-		srv.UseRaft(n)
+		raftNode = raft.NewNode(cfg.NodeID, cfg.RaftHTTPAddr, cfg.Peers, st, srv, time.Duration(cfg.HeartbeatMS)*time.Millisecond, time.Duration(cfg.ElectionMS)*time.Millisecond, logger)
+		srv.UseRaft(raftNode)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -76,10 +90,56 @@ func main() {
 	})
 
 	// Start the gRPC server
-	lis, _ := net.Listen("tcp", cfg.GRPCAddr)
+	lis, err := net.Listen("tcp", cfg.GRPCAddr)
+	if err != nil {
+		logger.Fatal("failed to listen on gRPC address", zap.Error(err), zap.String("addr", cfg.GRPCAddr))
+	}
 	grpcServer := grpc.NewServer()
 	pb.RegisterCacheServiceServer(grpcServer, srv)
-	grpcServer.Serve(lis)
+
+	// Graceful shutdown on SIGINT/SIGTERM
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go grpcServer.Serve(lis)
+
+	sig := <-sigCh
+	logger.Info("received shutdown signal", zap.String("signal", sig.String()))
+
+	// Graceful shutdown sequence
+	logger.Info("shutting down gracefully...")
+
+	// 1. Stop accepting new gRPC requests
+	grpcServer.GracefulStop()
+
+	// 2. Cancel context to stop HTTP gateway
+	cancel()
+
+	// 3. Wait for gateway to stop
+	if err := waitGroup.Wait(); err != nil {
+		logger.Error("gateway shutdown error", zap.Error(err))
+	}
+
+	// 4. Close raft node
+	if raftNode != nil {
+		raftNode.Close()
+	}
+
+	// 5. Close cache
+	c.Close()
+
+	// 6. Stop config watcher
+	close(stop)
+
+	// 7. Stop metrics server
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+		logger.Error("metrics server shutdown error", zap.Error(err))
+	}
+
+	metrics.Close()
+	logger.Info("shutdown complete")
 }
 
 func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *server.CacheService, logger *zap.Logger, cfg *config.AtomicConfig) {
@@ -117,7 +177,11 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 		}
 		var in req
 		dec := json.NewDecoder(r.Body)
-		_ = dec.Decode(&in)
+		if err := dec.Decode(&in); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("invalid request body"))
+			return
+		}
 		if in.Addr == "" {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte("missing addr"))
@@ -138,7 +202,11 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 		}
 		var in req
 		dec := json.NewDecoder(r.Body)
-		_ = dec.Decode(&in)
+		if err := dec.Decode(&in); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("invalid request body"))
+			return
+		}
 		if in.Addr == "" {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte("missing addr"))

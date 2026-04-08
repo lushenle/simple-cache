@@ -144,13 +144,13 @@ func TestHeapMaintenance(t *testing.T) {
 	c.Set("key3", "v", "30s")
 
 	c.mu.Lock("write")
-	entry := (*c.expirationHeap)[0]
+	entry := c.expirationHeap.Peek()
 	assert.Equal(t, "key3", entry.key)
 	c.mu.Unlock()
 
 	c.Del("key2")
 	c.mu.Lock("write")
-	for _, e := range *c.expirationHeap {
+	for _, e := range c.expirationHeap.entries {
 		assert.NotEqual(t, "key2", e.key)
 	}
 	c.mu.Unlock()

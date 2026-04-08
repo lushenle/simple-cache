@@ -24,7 +24,7 @@ const (
 	testKey     = "test-key"
 	testValue   = "test-value"
 	testTTL     = 10 * time.Second
-	testPattern = `^test-\d$`
+	testPattern = `^search-test-\d$`
 )
 
 var lis *bufconn.Listener
@@ -315,7 +315,7 @@ func TestClient_ExpireKey(t *testing.T) {
 	require.NoError(t, cli.Set(ctx, keyNotToExpire, "another value", 20*time.Second))
 
 	t.Run("ExpireExistingKey", func(t *testing.T) {
-		existed, err := cli.ExpireKey(ctx, keyToExpire)
+		existed, err := cli.ExpireKey(ctx, keyToExpire, 1*time.Nanosecond)
 		assert.NoError(t, err)
 		assert.True(t, existed, "ExpireKey should return true for an existing key")
 
@@ -327,7 +327,7 @@ func TestClient_ExpireKey(t *testing.T) {
 	})
 
 	t.Run("ExpireNonExistingKey", func(t *testing.T) {
-		existed, err := cli.ExpireKey(ctx, "non-existent-key-for-expire")
+		existed, err := cli.ExpireKey(ctx, "non-existent-key-for-expire", 1*time.Second)
 		assert.NoError(t, err)
 		assert.False(t, existed, "ExpireKey should return false for a non-existing key")
 	})

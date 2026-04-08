@@ -8,7 +8,7 @@ import (
 )
 
 func (c *Cache) Get(key string) (any, bool) {
-	c.logger.Info("get", zap.String("key", key))
+	c.logger.Debug("get", zap.String("key", key))
 
 	start := time.Now()
 	var success bool
@@ -45,7 +45,8 @@ func (c *Cache) handleExpiredKey(key string) (any, bool) {
 	}
 
 	if !item.expiration.IsZero() && time.Now().After(item.expiration) {
-		delete(c.items, key)
+		// Use delInternal for complete cleanup (heap + prefixTree + items)
+		c.delInternal(key)
 		return "", false
 	}
 

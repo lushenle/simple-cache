@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
@@ -66,12 +67,20 @@ func (a *AtomicConfig) Set(c *Config) {
 }
 
 type Watcher struct {
-	path string
-	out  *AtomicConfig
+	path   string
+	out    *AtomicConfig
+	logger *zap.Logger
 }
 
 func NewWatcher(path string, out *AtomicConfig) *Watcher {
-	return &Watcher{path: path, out: out}
+	return &Watcher{path: path, out: out, logger: zap.NewNop()}
+}
+
+// SetLogger sets a logger for the watcher.
+func (w *Watcher) SetLogger(logger *zap.Logger) {
+	if logger != nil {
+		w.logger = logger
+	}
 }
 
 func (w *Watcher) Start(stop <-chan struct{}) {
@@ -95,10 +104,12 @@ func (w *Watcher) Start(stop <-chan struct{}) {
 			}
 			cfg := &Config{}
 			if err := yaml.Unmarshal(b, cfg); err != nil {
+				w.logger.Warn("failed to parse config file, skipping hot reload", zap.Error(err), zap.String("path", w.path))
 				continue
 			}
 			w.out.Set(cfg)
 			last = b
+			w.logger.Info("config reloaded", zap.String("path", w.path))
 		}
 	}
 }
