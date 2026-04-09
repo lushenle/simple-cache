@@ -28,15 +28,13 @@ func (c *Cache) cleanupWorker() {
 }
 
 func (c *Cache) cleanupExpired() {
-	c.logger.Info("starting cleanup expired")
-
 	start := time.Now()
 	budget := c.cleanupInterval / 20
 	if budget <= 0 {
 		budget = 5 * time.Millisecond
 	}
 
-	c.mu.Lock("write")
+	c.mu.Lock(metrics.LockWrite)
 	defer c.mu.Unlock()
 
 	now := time.Now()
@@ -46,31 +44,38 @@ func (c *Cache) cleanupExpired() {
 			break
 		}
 
-		entry := (*c.expirationHeap)[0]
+		entry := c.expirationHeap.Peek()
 		if entry.expiration.After(now) {
 			break
 		}
 
 		heap.Pop(c.expirationHeap)
+		// Remove from expirationIndex
+		delete(c.expirationIndex, entry.key)
+
 		if item, exists := c.items[entry.key]; exists {
 			if item.expiration.Equal(entry.expiration) {
-				c.delInternal(entry.key)
+				delete(c.items, entry.key)
+				c.prefixTree.Delete(entry.key)
 				processed++
 			}
 		}
 	}
 	metrics.UpdateExpirationHeapSize(c.expirationHeap.Len())
+	metrics.UpdateKeysTotal(len(c.items))
 	metrics.ObserveOperation(time.Since(start), metrics.OpCleanup)
 }
 
 func (c *Cache) nextCleanupDelay() time.Duration {
 	delay := c.cleanupInterval
-	c.mu.RLock("read")
+	c.mu.RLock(metrics.LockRead)
 	if c.expirationHeap.Len() > 0 {
-		next := (*c.expirationHeap)[0].expiration
-		until := time.Until(next)
-		if until > 0 && until < delay {
-			delay = until
+		entry := c.expirationHeap.Peek()
+		if entry != nil {
+			until := time.Until(entry.expiration)
+			if until > 0 && until < delay {
+				delay = until
+			}
 		}
 	}
 	c.mu.RUnlock()

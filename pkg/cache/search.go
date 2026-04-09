@@ -10,7 +10,7 @@ import (
 )
 
 func (c *Cache) Search(pattern string, useRegex bool) ([]string, error) {
-	c.logger.Info("search", zap.String("pattern", pattern))
+	c.logger.Debug("search", zap.String("pattern", pattern))
 
 	c.mu.RLock(metrics.LockRead)
 	defer c.mu.RUnlock()
@@ -33,8 +33,6 @@ func (c *Cache) Search(pattern string, useRegex bool) ([]string, error) {
 }
 
 func (c *Cache) searchPrefix(prefix string) []string {
-	c.logger.Info("search", zap.String("prefix", prefix))
-
 	result := make([]string, 0)
 
 	c.prefixTree.WalkPrefix(prefix, func(s string, v interface{}) bool {
@@ -51,8 +49,6 @@ func (c *Cache) searchPrefix(prefix string) []string {
 }
 
 func (c *Cache) searchGeneric(pattern string, useRegex bool) ([]string, error) {
-	c.logger.Info("search", zap.String("pattern", pattern), zap.Bool("useRegex", useRegex))
-
 	var (
 		re  *regexp.Regexp
 		err error
@@ -69,66 +65,29 @@ func (c *Cache) searchGeneric(pattern string, useRegex bool) ([]string, error) {
 		}
 	}
 
-	seen := make(map[string]struct{})
 	matches := make([]string, 0)
 
 	c.prefixTree.Walk(func(s string, v interface{}) bool {
-		// Filter out duplicates
-		if _, exists := seen[s]; exists {
-			return false
-		}
-		seen[s] = struct{}{}
-
 		// Check if key has an expiration and is already expired
 		if item, exists := c.items[s]; exists {
 			if !item.expiration.IsZero() && time.Now().After(item.expiration) {
 				return false
 			}
-		}
 
-		// Pattern matching
-		var match bool
-		if useRegex {
-			match = re.MatchString(s)
-		} else {
-			match, _ = filepath.Match(pattern, s)
-		}
-
-		if match {
-			matches = append(matches, s)
-		}
-		return false
-	})
-
-	return matches, nil
-}
-
-func (c *Cache) searchWorker(pattern string, useRegex bool, re *regexp.Regexp, results chan string) {
-	c.logger.Info("search", zap.String("pattern", pattern))
-
-	seen := make(map[string]struct{})
-
-	c.prefixTree.Walk(func(s string, v interface{}) bool {
-		if _, exists := seen[s]; exists {
-			return false
-		}
-		seen[s] = struct{}{}
-
-		// Skip keys with expiration set and already expired
-		if item, exists := c.items[s]; exists {
-			if !item.expiration.IsZero() && time.Now().After(item.expiration) {
-				return false
-			}
+			// Pattern matching
 			var match bool
 			if useRegex {
 				match = re.MatchString(s)
 			} else {
 				match, _ = filepath.Match(pattern, s)
 			}
+
 			if match {
-				results <- s
+				matches = append(matches, s)
 			}
 		}
 		return false
 	})
+
+	return matches, nil
 }

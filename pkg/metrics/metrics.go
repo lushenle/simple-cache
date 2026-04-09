@@ -8,6 +8,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// stopCh is used to gracefully stop the memory usage goroutine.
+var stopCh chan struct{}
+var initOnce sync.Once
+
 type InstrumentedRWMutex struct {
 	mu sync.RWMutex
 }
@@ -158,36 +162,56 @@ var (
 )
 
 func Init() {
-	prometheus.MustRegister(
-		RequestsTotal,
-		RequestDuration,
-		KeysTotal,
-		ExpirationHeapSize,
-		OperationDuration,
-		OperationCount,
-		CacheSize,
-		MemoryUsage,
-		MutexWait,
-		RaftRole,
-		RaftCommitIndex,
-		RaftLastApplied,
-		RaftLeaderChanges,
-		RaftAppendEntriesLatency,
-		PeersTotal,
-	)
+	initOnce.Do(func() {
+		prometheus.MustRegister(
+			RequestsTotal,
+			RequestDuration,
+			KeysTotal,
+			ExpirationHeapSize,
+			OperationDuration,
+			OperationCount,
+			CacheSize,
+			MemoryUsage,
+			MutexWait,
+			RaftRole,
+			RaftCommitIndex,
+			RaftLastApplied,
+			RaftLeaderChanges,
+			RaftAppendEntriesLatency,
+			PeersTotal,
+		)
 
-	go updateMemoryUsage()
+		stopCh = make(chan struct{})
+		go updateMemoryUsage()
+	})
+}
+
+// Close stops the background metrics goroutines.
+func Close() {
+	if stopCh != nil {
+		select {
+		case <-stopCh:
+			// Already closed
+			return
+		default:
+			close(stopCh)
+		}
+	}
 }
 
 func updateMemoryUsage() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 	for {
-		var m runtime.MemStats
-		runtime.ReadMemStats(&m)
-
-		MemoryUsage.WithLabelValues("alloc").Set(float64(m.Alloc))
-		MemoryUsage.WithLabelValues("total").Set(float64(m.Sys))
-
-		time.Sleep(5 * time.Second)
+		select {
+		case <-stopCh:
+			return
+		case <-ticker.C:
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
+			MemoryUsage.WithLabelValues("alloc").Set(float64(m.Alloc))
+			MemoryUsage.WithLabelValues("total").Set(float64(m.Sys))
+		}
 	}
 }
 

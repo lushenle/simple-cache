@@ -147,9 +147,13 @@ func (c *Client) Search(ctx context.Context, pattern string, isRegex bool) ([]st
 	return resp.Keys, nil
 }
 
-// ExpireKey expires a key
-func (c *Client) ExpireKey(ctx context.Context, key string) (bool, error) {
-	resp, err := c.client.ExpireKey(ctx, &pb.ExpireKeyRequest{Key: key})
+// ExpireKey sets an expiration time on an existing key.
+// If ttl <= 0, the expiration is removed (key becomes persistent).
+func (c *Client) ExpireKey(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	resp, err := c.client.ExpireKey(ctx, &pb.ExpireKeyRequest{
+		Key:    key,
+		Expire: formatTTL(ttl),
+	})
 	if err != nil {
 		return false, err
 	}

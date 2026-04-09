@@ -9,7 +9,7 @@ import (
 )
 
 func (c *Cache) Del(key string) bool {
-	c.logger.Info("del", zap.String("key", key))
+	c.logger.Debug("del", zap.String("key", key))
 
 	start := time.Now()
 	defer func() {
@@ -31,12 +31,11 @@ func (c *Cache) Del(key string) bool {
 }
 
 func (c *Cache) delInternal(key string) {
-	for i, entry := range *c.expirationHeap {
-		if entry.key == key {
-			heap.Remove(c.expirationHeap, i)
-			metrics.UpdateExpirationHeapSize(c.expirationHeap.Len())
-			break
-		}
+	// O(log n) deletion using expirationIndex map
+	if idx, ok := c.expirationIndex[key]; ok {
+		heap.Remove(c.expirationHeap, idx) // Swap callback keeps expirationIndex in sync
+		delete(c.expirationIndex, key)
+		metrics.UpdateExpirationHeapSize(c.expirationHeap.Len())
 	}
 
 	delete(c.items, key)

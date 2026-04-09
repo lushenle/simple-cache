@@ -9,7 +9,7 @@ import (
 )
 
 func (c *Cache) Set(key string, value any, expire string) error {
-	c.logger.Info("set", zap.String("key", key))
+	c.logger.Debug("set", zap.String("key", key))
 
 	start := time.Now()
 	var success bool
@@ -18,28 +18,29 @@ func (c *Cache) Set(key string, value any, expire string) error {
 		metrics.IncOperation(metrics.OpSet, success)
 	}()
 
-	// Acquire an item from the pool
-	item := itemPool.Get().(*Item)
-	item.value = value
-
 	var expiration time.Time
 	if expire != "" {
 		duration, err := time.ParseDuration(expire)
 		if err != nil {
 			return err
 		}
-
 		expiration = time.Now().Add(duration)
 	}
 
 	c.mu.Lock(metrics.LockWrite)
 	defer c.mu.Unlock()
 
+	// Clean up old entry if key already exists (fixes stale expiration in heap)
+	if _, exists := c.items[key]; exists {
+		c.delInternal(key)
+	}
+
 	if !expiration.IsZero() {
 		heap.Push(c.expirationHeap, &expirationEntry{
 			key:        key,
 			expiration: expiration,
 		})
+		// expirationIndex is updated by the onSwap callback during heap.Push
 		metrics.UpdateExpirationHeapSize(c.expirationHeap.Len())
 	}
 
@@ -57,10 +58,6 @@ func (c *Cache) Set(key string, value any, expire string) error {
 }
 
 func (c *Cache) setInternal(key string, item *Item) {
-	if _, exists := c.items[key]; exists {
-		c.prefixTree.Delete(key)
-	}
-
 	c.items[key] = item
 	c.prefixTree.Insert(key, nil)
 }

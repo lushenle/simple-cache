@@ -305,6 +305,12 @@
             "required": true,
             "type": "string",
             "pattern": "[^/]+"
+          },
+          {
+            "name": "expire",
+            "in": "query",
+            "required": false,
+            "type": "string"
           }
         ],
         "tags": [

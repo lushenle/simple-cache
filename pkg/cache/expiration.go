@@ -1,34 +1,48 @@
 package cache
 
-import "time"
+import (
+	"container/heap"
+	"time"
 
-type ExpirationHeap []*expirationEntry
+	"github.com/lushenle/simple-cache/pkg/metrics"
+	"go.uber.org/zap"
+)
 
-type expirationEntry struct {
-	key        string
-	expiration time.Time
-}
+// SetExpiration updates the expiration time for an existing key.
+// Returns true if the key existed and was updated.
+func (c *Cache) SetExpiration(key string, expire string) bool {
+	c.logger.Debug("set expiration", zap.String("key", key))
 
-func (h ExpirationHeap) Len() int {
-	return len(h)
-}
+	duration, err := time.ParseDuration(expire)
+	if err != nil {
+		return false
+	}
 
-func (h ExpirationHeap) Less(i, j int) bool {
-	return h[i].expiration.Before(h[j].expiration)
-}
+	c.mu.Lock(metrics.LockWrite)
+	defer c.mu.Unlock()
 
-func (h ExpirationHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-}
+	item, exists := c.items[key]
+	if !exists {
+		return false
+	}
 
-func (h *ExpirationHeap) Push(x interface{}) {
-	*h = append(*h, x.(*expirationEntry))
-}
+	// Remove old expiration from heap if present
+	if !item.expiration.IsZero() {
+		if idx, ok := c.expirationIndex[key]; ok {
+			heap.Remove(c.expirationHeap, idx)
+			delete(c.expirationIndex, key)
+			metrics.UpdateExpirationHeapSize(c.expirationHeap.Len())
+		}
+	}
 
-func (h *ExpirationHeap) Pop() interface{} {
-	old := *h
-	n := len(old)
-	x := old[n-1]
-	*h = old[0 : n-1]
-	return x
+	// Set new expiration
+	item.expiration = time.Now().Add(duration)
+	heap.Push(c.expirationHeap, &expirationEntry{
+		key:        key,
+		expiration: item.expiration,
+	})
+	// expirationIndex is updated by the onSwap callback during heap.Push
+	metrics.UpdateExpirationHeapSize(c.expirationHeap.Len())
+
+	return true
 }
