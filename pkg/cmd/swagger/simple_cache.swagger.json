@@ -45,6 +45,74 @@
         ]
       }
     },
+    "/v1/dump": {
+      "post": {
+        "summary": "Dump cache data to file.",
+        "description": "Dump all cache data to a local file for persistence.",
+        "operationId": "dump",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/pbDumpResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/pbDumpRequest"
+            }
+          }
+        ],
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v1/load": {
+      "post": {
+        "summary": "Load cache data from file.",
+        "description": "Load cache data from a previously dumped file.",
+        "operationId": "load",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/pbLoadResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/pbLoadRequest"
+            }
+          }
+        ],
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
     "/v1/search": {
       "get": {
         "summary": "Search keys by prefix.",
@@ -350,6 +418,45 @@
         }
       }
     },
+    "pbDumpRequest": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "title": "\"json\" or \"binary\", default \"binary\""
+        },
+        "path": {
+          "type": "string",
+          "title": "file path, empty means default"
+        }
+      }
+    },
+    "pbDumpResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "totalKeys": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "fileSize": {
+          "type": "string",
+          "format": "int64"
+        },
+        "path": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string"
+        },
+        "durationMs": {
+          "type": "number",
+          "format": "double"
+        }
+      }
+    },
     "pbExpireKeyResponse": {
       "type": "object",
       "properties": {
@@ -369,6 +476,42 @@
         },
         "found": {
           "type": "boolean"
+        }
+      }
+    },
+    "pbLoadRequest": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "title": "file path, empty means auto-detect default"
+        }
+      }
+    },
+    "pbLoadResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "totalKeys": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "loadedKeys": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "skippedKeys": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "path": {
+          "type": "string"
+        },
+        "durationMs": {
+          "type": "number",
+          "format": "double"
         }
       }
     },

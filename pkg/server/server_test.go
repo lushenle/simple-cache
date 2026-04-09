@@ -18,7 +18,7 @@ func TestGRPCServer(t *testing.T) {
 	logger := log.NewLogger(plugin)
 
 	c := cache.New(time.Second*3, logger)
-	srv := New(c)
+	srv := New(c, "test-node")
 
 	t.Run("SetGet", func(t *testing.T) {
 		val, err := utils.ConvertToAnyPB("value")

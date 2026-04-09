@@ -159,6 +159,39 @@ var (
 			Help: "Number of peers in the raft cluster",
 		},
 	)
+
+	// Persistence metrics
+	PersistenceOpTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cache_persistence_op_total",
+			Help: "Total number of persistence operations",
+		},
+		[]string{"op", "status"}, // op: dump/load, status: success/error
+	)
+
+	PersistenceDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "cache_persistence_duration_seconds",
+			Help:    "Duration of persistence operations",
+			Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0},
+		},
+		[]string{"op"}, // dump/load
+	)
+
+	DumpKeysGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "cache_dump_keys_total",
+			Help: "Number of keys in the last dump",
+		},
+	)
+
+	LoadKeysGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "cache_load_keys_total",
+			Help: "Number of keys in the last load",
+		},
+		[]string{"state"}, // loaded/skipped
+	)
 )
 
 func Init() {
@@ -179,6 +212,10 @@ func Init() {
 			RaftLeaderChanges,
 			RaftAppendEntriesLatency,
 			PeersTotal,
+			PersistenceOpTotal,
+			PersistenceDuration,
+			DumpKeysGauge,
+			LoadKeysGauge,
 		)
 
 		stopCh = make(chan struct{})
@@ -249,6 +286,12 @@ func SetRaftLastApplied(v uint64)                 { RaftLastApplied.Set(float64(
 func IncRaftLeaderChanges()                       { RaftLeaderChanges.Inc() }
 func ObserveAppendEntriesLatency(d time.Duration) { RaftAppendEntriesLatency.Observe(d.Seconds()) }
 func SetPeersTotal(n int)                         { PeersTotal.Set(float64(n)) }
+
+// Persistence metrics helpers
+func IncPersistenceOp(op, status string)            { PersistenceOpTotal.WithLabelValues(op, status).Inc() }
+func ObservePersistenceDuration(op string, d float64) { PersistenceDuration.WithLabelValues(op).Observe(d) }
+func SetDumpKeys(n int64)                           { DumpKeysGauge.Set(float64(n)) }
+func SetLoadKeys(loaded, skipped int64)             { LoadKeysGauge.WithLabelValues("loaded").Set(float64(loaded)); LoadKeysGauge.WithLabelValues("skipped").Set(float64(skipped)) }
 
 func (m *InstrumentedRWMutex) Lock(opType LockOp) {
 	start := time.Now()

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -68,11 +69,28 @@ func main() {
 
 	// Create a new gRPC server
 	c := cache.New(30*time.Second, logger)
-	srv := server.New(c)
+	srv := server.New(c, cfg.NodeID)
+
+	// Auto-load from dump file on startup
+	if cfg.LoadOnStartup {
+		defaultPath := cache.DefaultDumpPath(cfg.NodeID, cfg.DumpFormat, cfg.DataDir)
+		if _, err := os.Stat(defaultPath); err == nil {
+			result, err := c.Load(cfg.NodeID, defaultPath)
+			if err != nil {
+				logger.Warn("failed to load cache from dump file", zap.Error(err), zap.String("path", defaultPath))
+			} else if result != nil && result.LoadedKeys > 0 {
+				logger.Info("loaded cache from dump file",
+					zap.String("path", result.Path),
+					zap.Int32("loaded", result.LoadedKeys),
+					zap.Int32("skipped", result.SkippedKeys),
+				)
+			}
+		}
+	}
 
 	var raftNode *raft.Node
 	if cfg.Mode == "distributed" {
-		st := raft.NewStorage("data/raft-" + cfg.NodeID + ".wal")
+		st := raft.NewStorage(filepath.Join(cfg.DataDir, "raft-"+cfg.NodeID+".wal"))
 		raftNode = raft.NewNode(cfg.NodeID, cfg.RaftHTTPAddr, cfg.Peers, st, srv, time.Duration(cfg.HeartbeatMS)*time.Millisecond, time.Duration(cfg.ElectionMS)*time.Millisecond, logger)
 		srv.UseRaft(raftNode)
 	}
@@ -125,13 +143,26 @@ func main() {
 		raftNode.Close()
 	}
 
-	// 5. Close cache
+	// 5. Auto-dump cache before closing
+	if cfg.DumpOnShutdown {
+		defaultPath := cache.DefaultDumpPath(cfg.NodeID, cfg.DumpFormat, cfg.DataDir)
+		if result, err := c.Dump(cfg.NodeID, cfg.DumpFormat, defaultPath); err != nil {
+			logger.Warn("failed to dump cache on shutdown", zap.Error(err))
+		} else if result != nil {
+			logger.Info("cache dumped on shutdown",
+				zap.String("path", result.Path),
+				zap.Int32("keys", result.TotalKeys),
+			)
+		}
+	}
+
+	// 6. Close cache
 	c.Close()
 
-	// 6. Stop config watcher
+	// 7. Stop config watcher
 	close(stop)
 
-	// 7. Stop metrics server
+	// 8. Stop metrics server
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
