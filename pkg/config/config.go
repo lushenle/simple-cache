@@ -10,16 +10,20 @@ import (
 )
 
 type Config struct {
-	Mode         string   `yaml:"mode"`
-	NodeID       string   `yaml:"node_id"`
-	GRPCAddr     string   `yaml:"grpc_addr"`
-	HTTPAddr     string   `yaml:"http_addr"`
-	RaftHTTPAddr string   `yaml:"raft_http_addr"`
-	MetricsAddr  string   `yaml:"metrics_addr"`
-	Peers        []string `yaml:"peers"`
-	HeartbeatMS  int      `yaml:"heartbeat_ms"`
-	ElectionMS   int      `yaml:"election_ms"`
-	HotReload    bool     `yaml:"hot_reload"`
+	Mode             string   `yaml:"mode"`
+	NodeID           string   `yaml:"node_id"`
+	GRPCAddr         string   `yaml:"grpc_addr"`
+	HTTPAddr         string   `yaml:"http_addr"`
+	RaftHTTPAddr     string   `yaml:"raft_http_addr"`
+	MetricsAddr      string   `yaml:"metrics_addr"`
+	Peers            []string `yaml:"peers"`
+	HeartbeatMS      int      `yaml:"heartbeat_ms"`
+	ElectionMS       int      `yaml:"election_ms"`
+	HotReload        bool     `yaml:"hot_reload"`
+	LoadOnStartup    bool     `yaml:"load_on_startup"`
+	DumpOnShutdown   bool     `yaml:"dump_on_shutdown"`
+	DumpFormat       string   `yaml:"dump_format"`
+	DataDir          string   `yaml:"data_dir"`
 }
 
 func Default() *Config {
@@ -30,9 +34,13 @@ func Default() *Config {
 		HTTPAddr:     ":8080",
 		RaftHTTPAddr: ":9090",
 		MetricsAddr:  ":2112",
-		HeartbeatMS:  200,
-		ElectionMS:   1200,
-		HotReload:    false,
+		HeartbeatMS:    200,
+		ElectionMS:     1200,
+		HotReload:      false,
+		LoadOnStartup:  true,
+		DumpOnShutdown: true,
+		DumpFormat:     "binary",
+		DataDir:        "data",
 	}
 }
 

@@ -8,3 +8,7 @@ peers: []
 heartbeat_ms: 200
 election_ms: 1200
 hot_reload: false
+load_on_startup: true
+dump_on_shutdown: true
+dump_format: binary
+data_dir: data

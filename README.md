@@ -50,6 +50,7 @@
   - [过期与清理机制](#过期与清理机制)
   - [搜索机制](#搜索机制)
   - [日志系统](#日志系统)
+  - [数据持久化](#数据持久化)
 
 ---
 
@@ -69,7 +70,8 @@
 - **配置热重载** — 可选的配置文件轮询热更新
 - **可观测性** — Prometheus 指标（独立端口）+ 结构化日志（zap + lumberjack 日志轮转）
 - **API 文档** — 内嵌 Swagger UI，启动后访问 `/api/docs/` 即可查看
-- **优雅关闭** — 完整的 7 步优雅关闭流程（gRPC → Gateway → Raft → Cache → Config → Metrics → Logger）
+- **优雅关闭** — 完整的 8 步优雅关闭流程（gRPC → Gateway → Raft → Dump → Cache → Config → Metrics → Logger）
+- **数据持久化** — 支持将缓存数据 Dump 到本地磁盘（二进制/JSON 双格式），启动时自动 Load 恢复，过期 key 自动跳过
 - **客户端 SDK** — 封装完整的 gRPC 客户端，提供友好的 Go API（包括批量操作）
 
 ---
@@ -413,6 +415,7 @@ simple-cache/
 │   │   ├── search.go            #   前缀搜索 + 正则搜索
 │   │   ├── heap.go              #   过期最小堆 (container/heap)
 │   │   ├── reset.go             #   Reset 清空缓存
+│   │   ├── persistence.go       #   Dump/Load 数据持久化
 │   │   ├── metrics.go           #   缓存大小估算
 │   │   └── *_test.go            #   单元测试 + 基准测试
 │   ├── client/                  # 📦 gRPC 客户端 SDK
@@ -467,6 +470,8 @@ simple-cache/
 | `Reset` | `ResetRequest{}` | `ResetResponse{success, keys_cleared}` | 清空缓存 |
 | `Search` | `SearchRequest{pattern, mode}` | `SearchResponse{keys}` | 搜索键 |
 | `ExpireKey` | `ExpireKeyRequest{key, expire}` | `ExpireKeyResponse{success, existed}` | 设置过期时间 |
+| `Dump` | `DumpRequest{format, path}` | `DumpResponse{success, total_keys, file_size, path, format, duration_ms}` | 导出缓存数据到文件 |
+| `Load` | `LoadRequest{path}` | `LoadResponse{success, total_keys, loaded_keys, skipped_keys, path, duration_ms}` | 从文件导入缓存数据 |
 
 **SearchRequest.MatchMode**：
 - `WILDCARD (0)` — 通配符匹配（默认），支持 `*`、`?`、`[...]`
@@ -485,6 +490,8 @@ simple-cache/
 | `GET` | `/v1/search/{pattern}` | 通配符搜索 |
 | `GET` | `/v1/search/{pattern}/{mode}` | 按模式搜索（`wildcard` 或 `regex`） |
 | `POST` | `/v1/{key}/expire` | 设置过期时间 |
+| `POST` | `/v1/dump` | 导出缓存数据 |
+| `POST` | `/v1/load` | 导入缓存数据 |
 
 **示例：**
 
@@ -510,6 +517,26 @@ curl -X POST http://localhost:8080/v1/greeting/expire \
 
 # Reset
 curl -X DELETE http://localhost:8080/v1
+
+# Dump（导出为二进制格式，默认）
+curl -X POST http://localhost:8080/v1/dump \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+# Dump（导出为 JSON 格式）
+curl -X POST http://localhost:8080/v1/dump \
+  -H "Content-Type: application/json" \
+  -d '{"format": "json"}'
+
+# Load（从默认路径加载）
+curl -X POST http://localhost:8080/v1/load \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+# Load（从指定路径加载）
+curl -X POST http://localhost:8080/v1/load \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/tmp/my-cache.dump.json"}'
 ```
 
 ### 集群管理接口
@@ -660,6 +687,10 @@ existed, err := cli.ExpireKey(ctx, "greeting", 0)
 | `heartbeat_ms` | int | `200` | Leader 心跳间隔（毫秒） |
 | `election_ms` | int | `1200` | 选举超时基准值（毫秒），实际超时 = `election_ms + random(0..election_ms)` |
 | `hot_reload` | bool | `false` | 是否启用配置文件热重载（每秒轮询） |
+| `load_on_startup` | bool | `true` | 启动时是否自动从默认路径加载缓存数据 |
+| `dump_on_shutdown` | bool | `true` | 关闭时是否自动导出缓存数据到默认路径 |
+| `dump_format` | string | `binary` | 默认导出格式：`binary` 或 `json` |
+| `data_dir` | string | `data` | 数据文件存储目录（Dump 文件 + Raft WAL） |
 
 > **注意**：`grpc_addr`、`http_addr`、`raft_http_addr`、`metrics_addr` 在服务启动时绑定，不支持热重载。
 
@@ -742,6 +773,15 @@ curl -X POST http://localhost:8080/cluster/leave \
 | 指标名 | 类型 | 标签 | 说明 |
 |--------|------|------|------|
 | `process_memory_bytes` | Gauge | `state` | 进程内存（`alloc` / `total`） |
+
+### 持久化指标
+
+| 指标名 | 类型 | 标签 | 说明 |
+|--------|------|------|------|
+| `cache_persistence_op_total` | Counter | `op` (dump/load), `status` (success/error) | 持久化操作总数 |
+| `cache_persistence_duration_seconds` | Histogram | `op` (dump/load) | 持久化操作耗时 |
+| `cache_dump_keys_total` | Gauge | — | 最近一次 Dump 的 key 数 |
+| `cache_load_keys_total` | Gauge | `state` (loaded/skipped) | 最近一次 Load 的 key 数 |
 
 ---
 
@@ -890,6 +930,41 @@ stateDiagram-v2
 - **日志轮转** — 集成 lumberjack，单文件最大 100MB，保留 7 天，自动压缩
 - **中间件日志** — 内置 gRPC 拦截器和 HTTP 中间件，自动记录请求方法、耗时、状态码
 - **调用者信息** — 自动记录调用文件名和行号（`AddCaller`）
+
+### 数据持久化
+
+Simple-Cache 支持将内存中的缓存数据导出到本地磁盘文件（Dump），并在启动时从磁盘文件恢复数据（Load）。
+
+**触发方式**：
+
+| 触发方式 | 时机 | 说明 |
+|---------|------|------|
+| 自动 Dump | 进程优雅关闭时 | 在 `c.Close()` 之前执行，失败不阻止关闭 |
+| 自动 Load | 进程启动时 | 在 `server.New()` 之前执行，失败不阻止启动 |
+| 手动 Dump | API 调用 `POST /v1/dump` | 指定格式（binary/json）和路径 |
+| 手动 Load | API 调用 `POST /v1/load` | 先清空缓存，再从文件加载 |
+
+**文件格式**：
+
+| 格式 | 文件扩展名 | 特点 |
+|------|-----------|------|
+| 二进制（默认） | `.dump` | 紧凑高效，16 字节头 + 条目 + 8 字节 CRC32 尾 |
+| JSON | `.dump.json` | 人类可读，便于调试和数据迁移 |
+
+**文件命名规则**：`{data_dir}/cache-{node_id}.dump[.json]`
+
+**核心流程**：
+
+```
+Dump: 获取写锁 → 遍历 items → 序列化 → 写入 .tmp → rename → 释放锁
+Load: 读取文件 → 解析格式 → 获取写锁 → 清空缓存 → 逐条加载（跳过已过期） → 释放锁
+```
+
+**原子写入**：Dump 采用"写临时文件 + os.Rename"策略，确保即使写入过程中断也不会损坏已有文件。
+
+**过期处理**：Load 时逐条检查过期时间，已过期的 key 直接跳过（计入 `skipped_keys`），即将过期的 key 正常加载后由 cleanupWorker 清理。
+
+> 详细设计参见 [docs/cache-persistence.md](docs/cache-persistence.md)
 
 ---
 

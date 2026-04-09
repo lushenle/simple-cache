@@ -25,6 +25,8 @@ const (
 	CacheService_Reset_FullMethodName     = "/pb.CacheService/Reset"
 	CacheService_Search_FullMethodName    = "/pb.CacheService/Search"
 	CacheService_ExpireKey_FullMethodName = "/pb.CacheService/ExpireKey"
+	CacheService_Dump_FullMethodName      = "/pb.CacheService/Dump"
+	CacheService_Load_FullMethodName      = "/pb.CacheService/Load"
 )
 
 // CacheServiceClient is the client API for CacheService service.
@@ -39,6 +41,8 @@ type CacheServiceClient interface {
 	Reset(ctx context.Context, in *ResetRequest, opts ...grpc.CallOption) (*ResetResponse, error)
 	Search(ctx context.Context, in *SearchRequest, opts ...grpc.CallOption) (*SearchResponse, error)
 	ExpireKey(ctx context.Context, in *ExpireKeyRequest, opts ...grpc.CallOption) (*ExpireKeyResponse, error)
+	Dump(ctx context.Context, in *DumpRequest, opts ...grpc.CallOption) (*DumpResponse, error)
+	Load(ctx context.Context, in *LoadRequest, opts ...grpc.CallOption) (*LoadResponse, error)
 }
 
 type cacheServiceClient struct {
@@ -109,6 +113,26 @@ func (c *cacheServiceClient) ExpireKey(ctx context.Context, in *ExpireKeyRequest
 	return out, nil
 }
 
+func (c *cacheServiceClient) Dump(ctx context.Context, in *DumpRequest, opts ...grpc.CallOption) (*DumpResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DumpResponse)
+	err := c.cc.Invoke(ctx, CacheService_Dump_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *cacheServiceClient) Load(ctx context.Context, in *LoadRequest, opts ...grpc.CallOption) (*LoadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LoadResponse)
+	err := c.cc.Invoke(ctx, CacheService_Load_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CacheServiceServer is the server API for CacheService service.
 // All implementations must embed UnimplementedCacheServiceServer
 // for forward compatibility.
@@ -121,6 +145,8 @@ type CacheServiceServer interface {
 	Reset(context.Context, *ResetRequest) (*ResetResponse, error)
 	Search(context.Context, *SearchRequest) (*SearchResponse, error)
 	ExpireKey(context.Context, *ExpireKeyRequest) (*ExpireKeyResponse, error)
+	Dump(context.Context, *DumpRequest) (*DumpResponse, error)
+	Load(context.Context, *LoadRequest) (*LoadResponse, error)
 	mustEmbedUnimplementedCacheServiceServer()
 }
 
@@ -148,6 +174,12 @@ func (UnimplementedCacheServiceServer) Search(context.Context, *SearchRequest) (
 }
 func (UnimplementedCacheServiceServer) ExpireKey(context.Context, *ExpireKeyRequest) (*ExpireKeyResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ExpireKey not implemented")
+}
+func (UnimplementedCacheServiceServer) Dump(context.Context, *DumpRequest) (*DumpResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Dump not implemented")
+}
+func (UnimplementedCacheServiceServer) Load(context.Context, *LoadRequest) (*LoadResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Load not implemented")
 }
 func (UnimplementedCacheServiceServer) mustEmbedUnimplementedCacheServiceServer() {}
 func (UnimplementedCacheServiceServer) testEmbeddedByValue()                      {}
@@ -278,6 +310,42 @@ func _CacheService_ExpireKey_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CacheService_Dump_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DumpRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CacheServiceServer).Dump(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CacheService_Dump_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CacheServiceServer).Dump(ctx, req.(*DumpRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CacheService_Load_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LoadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CacheServiceServer).Load(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CacheService_Load_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CacheServiceServer).Load(ctx, req.(*LoadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CacheService_ServiceDesc is the grpc.ServiceDesc for CacheService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -308,6 +376,14 @@ var CacheService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ExpireKey",
 			Handler:    _CacheService_ExpireKey_Handler,
+		},
+		{
+			MethodName: "Dump",
+			Handler:    _CacheService_Dump_Handler,
+		},
+		{
+			MethodName: "Load",
+			Handler:    _CacheService_Load_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

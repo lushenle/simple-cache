@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package pb;
+
+option go_package = "github.com/lushenle/simple-cache/pkg/pb";
+
+message DumpRequest {
+    string format = 1;  // "json" or "binary", default "binary"
+    string path = 2;    // file path, empty means default
+}
+
+message DumpResponse {
+    bool success = 1;
+    int32 total_keys = 2;
+    int64 file_size = 3;
+    string path = 4;
+    string format = 5;
+    double duration_ms = 6;
+}
+
+message LoadRequest {
+    string path = 1;  // file path, empty means auto-detect default
+}
+
+message LoadResponse {
+    bool success = 1;
+    int32 total_keys = 2;
+    int32 loaded_keys = 3;
+    int32 skipped_keys = 4;
+    string path = 5;
+    double duration_ms = 6;
+}
