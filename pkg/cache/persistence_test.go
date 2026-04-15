@@ -208,3 +208,17 @@ func TestDumpDefaultPath(t *testing.T) {
 	assert.Equal(t, "data/cache-node1.dump.json", DefaultDumpPath("node1", "json", "data"))
 	assert.Equal(t, "custom/cache-node1.dump", DefaultDumpPath("node1", "binary", "custom"))
 }
+
+func TestDumpInvalidFormat(t *testing.T) {
+	logger := zap.NewNop()
+	c := New(time.Minute, logger)
+	defer c.Close()
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "cache-node1.dump")
+
+	_, err := c.Dump("node1", "yaml", path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported dump format")
+	assert.NoFileExists(t, path)
+}

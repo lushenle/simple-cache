@@ -64,6 +64,15 @@ type LoadResult struct {
 // format: "binary" or "json"
 // path: file path, empty means default (data/cache-{nodeID}.dump)
 func (c *Cache) Dump(nodeID, format, path string) (*DumpResult, error) {
+	switch format {
+	case "":
+		format = "binary"
+	case "binary", "json":
+	default:
+		metrics.IncPersistenceOp("dump", "error")
+		return nil, fmt.Errorf("unsupported dump format: %s", format)
+	}
+
 	c.logger.Info("starting cache dump", zap.String("format", format), zap.String("path", path))
 
 	start := time.Now()
