@@ -496,7 +496,10 @@ func decodeBinaryDump(data []byte) ([]DumpEntry, error) {
 	}
 
 	if offset != footerStart {
-		return nil, fmt.Errorf("invalid payload length: %d trailing bytes", footerStart-offset)
+		if offset < footerStart {
+			return nil, fmt.Errorf("invalid payload length: %d trailing bytes", footerStart-offset)
+		}
+		return nil, fmt.Errorf("invalid payload length: over-read by %d bytes", offset-footerStart)
 	}
 
 	return entries, nil
