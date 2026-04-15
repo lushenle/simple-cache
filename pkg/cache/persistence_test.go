@@ -1,7 +1,9 @@
 package cache
 
 import (
+	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"testing"
@@ -221,4 +223,34 @@ func TestDumpInvalidFormat(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported dump format")
 	assert.NoFileExists(t, path)
+}
+
+func TestDecodeBinaryDumpRejectsCRC32Mismatch(t *testing.T) {
+	data, err := encodeBinaryDump([]DumpEntry{
+		{Key: "key1", Value: "value1", ValueType: "string"},
+	})
+	require.NoError(t, err)
+
+	// Corrupt payload while keeping header/footer length intact.
+	data[20] ^= 0xFF
+
+	_, err = decodeBinaryDump(data)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "crc32 mismatch")
+}
+
+func TestDecodeBinaryDumpRejectsTruncatedEntryByCount(t *testing.T) {
+	data, err := encodeBinaryDump([]DumpEntry{
+		{Key: "key1", Value: "value1", ValueType: "string"},
+	})
+	require.NoError(t, err)
+
+	// Tamper count to expect one more entry and update checksum so parse validation is exercised.
+	binary.BigEndian.PutUint32(data[8:12], 2)
+	footerStart := len(data) - 8
+	binary.BigEndian.PutUint32(data[footerStart:footerStart+4], crc32.ChecksumIEEE(data[:footerStart]))
+
+	_, err = decodeBinaryDump(data)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "truncated dump")
 }

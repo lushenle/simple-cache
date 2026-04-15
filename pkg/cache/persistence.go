@@ -138,7 +138,7 @@ func (c *Cache) Dump(nodeID, format, path string) (*DumpResult, error) {
 		return nil, fmt.Errorf("serialize dump data: %w", err)
 	}
 
-	// Atomic write: write to temp file, then rename
+	// Atomic and durable write: write+fsync temp file, rename, then fsync directory
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		metrics.IncPersistenceOp("dump", "error")
@@ -146,15 +146,51 @@ func (c *Cache) Dump(nodeID, format, path string) (*DumpResult, error) {
 	}
 
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	tmpFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		metrics.IncPersistenceOp("dump", "error")
+		return nil, fmt.Errorf("create temp file: %w", err)
+	}
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
 		metrics.IncPersistenceOp("dump", "error")
 		return nil, fmt.Errorf("write temp file: %w", err)
+	}
+
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		metrics.IncPersistenceOp("dump", "error")
+		return nil, fmt.Errorf("sync temp file: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		metrics.IncPersistenceOp("dump", "error")
+		return nil, fmt.Errorf("close temp file: %w", err)
 	}
 
 	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
 		metrics.IncPersistenceOp("dump", "error")
 		return nil, fmt.Errorf("rename temp file: %w", err)
+	}
+
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		metrics.IncPersistenceOp("dump", "error")
+		return nil, fmt.Errorf("open directory for sync: %w", err)
+	}
+	if err := dirFile.Sync(); err != nil {
+		_ = dirFile.Close()
+		metrics.IncPersistenceOp("dump", "error")
+		return nil, fmt.Errorf("sync directory: %w", err)
+	}
+	if err := dirFile.Close(); err != nil {
+		metrics.IncPersistenceOp("dump", "error")
+		return nil, fmt.Errorf("close directory: %w", err)
 	}
 
 	durationMs := float64(time.Since(start).Microseconds()) / 1000.0
@@ -368,7 +404,7 @@ func encodeBinaryDump(entries []DumpEntry) ([]byte, error) {
 }
 
 func decodeBinaryDump(data []byte) ([]DumpEntry, error) {
-	if len(data) < 16 {
+	if len(data) < 24 {
 		return nil, fmt.Errorf("file too small: %d bytes", len(data))
 	}
 
@@ -385,49 +421,66 @@ func decodeBinaryDump(data []byte) ([]DumpEntry, error) {
 	count := binary.BigEndian.Uint32(data[8:12])
 	// data[12:16] = flags
 
+	footerStart := len(data) - 8
+	expectedChecksum := binary.BigEndian.Uint32(data[footerStart : footerStart+4])
+	padding := binary.BigEndian.Uint32(data[footerStart+4 : footerStart+8])
+	if padding != 0 {
+		return nil, fmt.Errorf("invalid footer padding: %d", padding)
+	}
+
+	actualChecksum := crc32.ChecksumIEEE(data[:footerStart])
+	if actualChecksum != expectedChecksum {
+		return nil, fmt.Errorf("crc32 mismatch: expected %08x, got %08x", expectedChecksum, actualChecksum)
+	}
+
 	entries := make([]DumpEntry, 0, count)
 	offset := 16
 
-	// Footer is last 8 bytes
-	footerStart := len(data) - 8
-
-	for i := uint32(0); i < count && offset < footerStart; i++ {
+	for i := uint32(0); i < count; i++ {
 		// Key
 		if offset+4 > footerStart {
-			break
+			return nil, fmt.Errorf("truncated dump at entry %d key length", i)
 		}
 		keyLen := binary.BigEndian.Uint32(data[offset : offset+4])
 		offset += 4
 		if offset+int(keyLen) > footerStart {
-			break
+			return nil, fmt.Errorf("truncated dump at entry %d key data", i)
 		}
 		key := string(data[offset : offset+int(keyLen)])
 		offset += int(keyLen)
 
 		// Value
 		if offset+4 > footerStart {
-			break
+			return nil, fmt.Errorf("truncated dump at entry %d value length", i)
 		}
 		valLen := binary.BigEndian.Uint32(data[offset : offset+4])
 		offset += 4
 		if offset+int(valLen) > footerStart {
-			break
+			return nil, fmt.Errorf("truncated dump at entry %d value data", i)
 		}
 		value := string(data[offset : offset+int(valLen)])
 		offset += int(valLen)
 
 		// Expiration
 		if offset+8 > footerStart {
-			break
+			return nil, fmt.Errorf("truncated dump at entry %d expiration", i)
 		}
 		expUnix := int64(binary.BigEndian.Uint64(data[offset : offset+8]))
 		offset += 8
 
 		// HasExpiration
 		if offset+1 > footerStart {
-			break
+			return nil, fmt.Errorf("truncated dump at entry %d expiration flag", i)
 		}
-		hasExp := data[offset] == 1
+		var hasExp bool
+		switch data[offset] {
+		case 0:
+			hasExp = false
+		case 1:
+			hasExp = true
+		default:
+			return nil, fmt.Errorf("invalid expiration flag at entry %d: %d", i, data[offset])
+		}
 		offset += 1
 
 		entry := DumpEntry{
@@ -440,6 +493,10 @@ func decodeBinaryDump(data []byte) ([]DumpEntry, error) {
 			entry.Expiration = time.Unix(0, expUnix).UTC().Format(time.RFC3339Nano)
 		}
 		entries = append(entries, entry)
+	}
+
+	if offset != footerStart {
+		return nil, fmt.Errorf("invalid payload length: %d trailing bytes", footerStart-offset)
 	}
 
 	return entries, nil
