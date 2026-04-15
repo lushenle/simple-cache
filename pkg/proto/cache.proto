@@ -8,6 +8,7 @@ import "del.proto";
 import "reset.proto";
 import "search.proto";
 import "expire_key.proto";
+import "dump.proto";
 
 import "google/api/annotations.proto";
 import "protoc-gen-openapiv2/options/annotations.proto";
@@ -106,6 +107,32 @@ service CacheService {
           description: "USe this api to expire a key."
           operation_id: "expireKey";
           tags: "cache";
+      };
+  }
+
+  rpc Dump(DumpRequest) returns (DumpResponse) {
+      option (google.api.http) = {
+          post: "/v1/dump"
+          body: "*"
+      };
+      option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+          summary: "Dump cache data to file."
+          description: "Dump all cache data to a local file for persistence."
+          operation_id: "dump";
+          tags: "persistence";
+      };
+  }
+
+  rpc Load(LoadRequest) returns (LoadResponse) {
+      option (google.api.http) = {
+          post: "/v1/load"
+          body: "*"
+      };
+      option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+          summary: "Load cache data from file."
+          description: "Load cache data from a previously dumped file."
+          operation_id: "load";
+          tags: "persistence";
       };
   }
 }

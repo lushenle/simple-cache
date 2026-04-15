@@ -16,13 +16,15 @@ import (
 
 type CacheService struct {
 	pb.UnimplementedCacheServiceServer
-	fsm  *fsm.FSM
-	node *raft.Node
+	fsm    *fsm.FSM
+	node   *raft.Node
+	nodeID string
 }
 
-func New(c *cache.Cache) *CacheService {
+func New(c *cache.Cache, nodeID string) *CacheService {
 	return &CacheService{
-		fsm: fsm.New(c),
+		fsm:    fsm.New(c),
+		nodeID: nodeID,
 	}
 }
 
@@ -159,4 +161,48 @@ func (s *CacheService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.S
 	}
 
 	return resp.(*pb.SearchResponse), nil
+}
+
+// Dump exports cache data to a file.
+func (s *CacheService) Dump(ctx context.Context, req *pb.DumpRequest) (*pb.DumpResponse, error) {
+	format := req.GetFormat()
+	if format == "" {
+		format = "binary"
+	}
+
+	result, err := s.fsm.Cache.Dump(s.NodeID(), format, req.GetPath())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "dump failed: %v", err)
+	}
+
+	return &pb.DumpResponse{
+		Success:    true,
+		TotalKeys:  result.TotalKeys,
+		FileSize:   result.FileSize,
+		Path:       result.Path,
+		Format:     result.Format,
+		DurationMs: result.DurationMs,
+	}, nil
+}
+
+// Load imports cache data from a file.
+func (s *CacheService) Load(ctx context.Context, req *pb.LoadRequest) (*pb.LoadResponse, error) {
+	result, err := s.fsm.Cache.Load(s.NodeID(), req.GetPath())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "load failed: %v", err)
+	}
+
+	return &pb.LoadResponse{
+		Success:      true,
+		TotalKeys:    result.TotalKeys,
+		LoadedKeys:   result.LoadedKeys,
+		SkippedKeys:  result.SkippedKeys,
+		Path:         result.Path,
+		DurationMs:   result.DurationMs,
+	}, nil
+}
+
+// NodeID returns the node ID for use in dump file naming.
+func (s *CacheService) NodeID() string {
+	return s.nodeID
 }

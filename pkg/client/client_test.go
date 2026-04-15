@@ -39,7 +39,7 @@ func init() {
 
 	// Use a real cache for integration-like tests within the unit test file.
 	// The cache.New parameters (e.g., cleanup interval) might be relevant for specific timing tests.
-	cacheSrv := server.New(cache.New(10*time.Second, logger))
+	cacheSrv := server.New(cache.New(10*time.Second, logger), "test-node")
 	pb.RegisterCacheServiceServer(s, cacheSrv)
 	go func() {
 		if err := s.Serve(lis); err != nil {

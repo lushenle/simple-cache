@@ -41,7 +41,9 @@ curl -X GET http://localhost:8080/v1/test_key
 使用POST请求使键过期：
 
 ```bash
-curl -X POST http://localhost:8080/v1/test_key/expire
+curl -X POST http://localhost:8080/v1/test_key/expire \
+  -H "Content-Type: application/json" \
+  -d '{"expire":"30s"}'
 ```
 
 成功响应：
@@ -90,6 +92,50 @@ curl -X GET "http://localhost:8080/v1/search?pattern=test_"
 curl -X GET "http://localhost:8080/v1/search?pattern=regex:test.*&mode=REGEX"
 ```
 
+## 数据持久化
+
+### 导出缓存数据 (Dump)
+
+导出为二进制格式（默认）：
+```bash
+curl -X POST http://localhost:8080/v1/dump \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+导出为 JSON 格式：
+```bash
+curl -X POST http://localhost:8080/v1/dump \
+  -H "Content-Type: application/json" \
+  -d '{"format": "json"}'
+```
+
+成功响应：
+```json
+{"success":true, "total_keys":2, "file_size":256, "path":"data/cache-node-1.dump", "format":"binary", "duration_ms":1.23}
+```
+
+### 导入缓存数据 (Load)
+
+从默认路径加载（自动检测 binary/json）：
+```bash
+curl -X POST http://localhost:8080/v1/load \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+从指定路径加载：
+```bash
+curl -X POST http://localhost:8080/v1/load \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/tmp/my-cache.dump.json"}'
+```
+
+成功响应：
+```json
+{"success":true, "total_keys":2, "loaded_keys":2, "skipped_keys":0, "path":"data/cache-node-1.dump", "duration_ms":0.85}
+```
+
 ## 健康检查
 
 ```bash
@@ -105,3 +151,7 @@ curl -X GET http://localhost:8080/readyz
 ```bash
 curl -X GET http://localhost:8080/cluster/peers
 ```
+
+## API 文档
+
+浏览器访问 `http://localhost:8080/api/docs/` 查看完整 Swagger UI 文档。

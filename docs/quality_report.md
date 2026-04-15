@@ -1,23 +1,25 @@
 # 代码质量评估报告
 
 - 静态分析：`go vet ./...` 无告警
-- 测试结果：`go test ./...` 全部通过
+- 测试结果：`go test -race ./...` 全部通过
 - 关键指标：
-  - 模块数：server、client、cache、fsm、command、pb、utils、metrics、log
-  - 并发热点：`pkg/cache/*` 路径的 `RWMutex` 与过期清理协程
+  - 模块数：server、client、cache、fsm、command、pb、raft、config、utils、metrics、log
+  - 并发热点：`pkg/cache/*` 路径的 `InstrumentedRWMutex` 与过期清理协程
   - 潜在风险：
-    - 过期清理与高频写可能竞争，需监控锁等待
+    - 过期清理与高频写可能竞争，需监控锁等待（已有 `cache_mutex_wait_seconds` 指标）
     - `Get` 过期检查的二次确认逻辑需保持一致性
+    - Dump 操作持有写锁，大缓存导出时可能影响读写延迟
 
 ## 圈复杂度与重复率（经验估计）
-- 复杂度中位数偏低，主要分支集中在 `search` 与过期路径
+- 复杂度中位数偏低，主要分支集中在 `search`、过期路径和持久化序列化
 - 重复代码较少，日志与指标调用为模板化结构
 
 ## 性能瓶颈初判
 - 大量键的过期堆维护与前缀树插入为写入侧热点
 - 批量写入逐个 RPC 调用，建议后续支持批量接口或流式 RPC
+- Dump 全量导出对大缓存（百万级 key）可能产生较大延迟和内存峰值
 
 ## 建议
 - 降低日志级别或添加采样
-- 指标增加锁争用与延迟直方图
 - 测试覆盖加入并发与大数据集场景
+- 考虑为 Dump 添加增量快照支持以优化大缓存场景
