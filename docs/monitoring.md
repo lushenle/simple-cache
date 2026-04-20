@@ -17,6 +17,8 @@
 - `raft_append_entries_latency_seconds_bucket`
 - `simple_cache_peers_total` 集群 Peer 数量
 
+> 当前尚未暴露独立的 snapshot/compaction 专用指标；可通过 `raft_commit_index`、`raft_last_applied` 与日志观察恢复/压缩行为。
+
 ## 持久化指标
 - `cache_persistence_op_total{op="dump|load",status="success|error"}` 持久化操作计数
 - `cache_persistence_duration_seconds{op="dump|load"}` 持久化操作耗时直方图

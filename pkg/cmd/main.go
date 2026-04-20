@@ -16,6 +16,7 @@ import (
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/lushenle/simple-cache/pkg/cache"
+	"github.com/lushenle/simple-cache/pkg/common"
 	"github.com/lushenle/simple-cache/pkg/config"
 	"github.com/lushenle/simple-cache/pkg/log"
 	"github.com/lushenle/simple-cache/pkg/metrics"
@@ -28,6 +29,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -71,9 +73,9 @@ func main() {
 	c := cache.New(30*time.Second, logger)
 	srv := server.New(c, cfg.NodeID)
 
-	// Auto-load from dump file on startup
-	if cfg.LoadOnStartup {
-		defaultPath := cache.DefaultDumpPath(cfg.NodeID, cfg.DumpFormat, cfg.DataDir)
+	// Auto-load from dump file on startup. Distributed mode relies on WAL replay instead.
+	if cfg.LoadOnStartup && !cfg.Mode.IsDistributed() {
+		defaultPath := cache.DefaultDumpPath(cfg.NodeID, cfg.DumpFormat.String(), cfg.DataDir)
 		if _, err := os.Stat(defaultPath); err == nil {
 			result, err := c.Load(cfg.NodeID, defaultPath)
 			if err != nil {
@@ -89,9 +91,20 @@ func main() {
 	}
 
 	var raftNode *raft.Node
-	if cfg.Mode == "distributed" {
+	if cfg.Mode == common.ModeDistributed {
 		st := raft.NewStorage(filepath.Join(cfg.DataDir, "raft-"+cfg.NodeID+".wal"))
-		raftNode = raft.NewNode(cfg.NodeID, cfg.RaftHTTPAddr, cfg.Peers, st, srv, time.Duration(cfg.HeartbeatMS)*time.Millisecond, time.Duration(cfg.ElectionMS)*time.Millisecond, logger)
+		raftNode = raft.NewNode(
+			cfg.NodeID,
+			cfg.RaftHTTPAddr,
+			cfg.Peers,
+			st,
+			srv,
+			time.Duration(cfg.HeartbeatMS)*time.Millisecond,
+			time.Duration(cfg.ElectionMS)*time.Millisecond,
+			cfg.SnapshotEnabled,
+			cfg.SnapshotThreshold,
+			logger,
+		)
 		srv.UseRaft(raftNode)
 	}
 
@@ -112,7 +125,17 @@ func main() {
 	if err != nil {
 		logger.Fatal("failed to listen on gRPC address", zap.Error(err), zap.String("addr", cfg.GRPCAddr))
 	}
-	grpcServer := grpc.NewServer()
+	grpcOptions := []grpc.ServerOption{
+		grpc.UnaryInterceptor(server.UnaryAuthInterceptor(cfg.AuthToken)),
+	}
+	if cfg.EnableTLS {
+		creds, err := credentials.NewServerTLSFromFile(cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			logger.Fatal("failed to load gRPC TLS credentials", zap.Error(err))
+		}
+		grpcOptions = append(grpcOptions, grpc.Creds(creds))
+	}
+	grpcServer := grpc.NewServer(grpcOptions...)
 	pb.RegisterCacheServiceServer(grpcServer, srv)
 
 	// Graceful shutdown on SIGINT/SIGTERM
@@ -145,8 +168,8 @@ func main() {
 
 	// 5. Auto-dump cache before closing
 	if cfg.DumpOnShutdown {
-		defaultPath := cache.DefaultDumpPath(cfg.NodeID, cfg.DumpFormat, cfg.DataDir)
-		if result, err := c.Dump(cfg.NodeID, cfg.DumpFormat, defaultPath); err != nil {
+		defaultPath := cache.DefaultDumpPath(cfg.NodeID, cfg.DumpFormat.String(), cfg.DataDir)
+		if result, err := c.Dump(cfg.NodeID, cfg.DumpFormat.String(), defaultPath); err != nil {
 			logger.Warn("failed to dump cache on shutdown", zap.Error(err))
 		} else if result != nil {
 			logger.Info("cache dumped on shutdown",
@@ -193,12 +216,20 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 	mux := http.NewServeMux()
 	mux.Handle("/", grpcMux)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		status := svr.HealthStatus()
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_ = json.NewEncoder(w).Encode(status)
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(svr.Role()))
+		status := svr.ReadinessStatus()
+		w.Header().Set("Content-Type", "application/json")
+		if status.Ready {
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+		_ = json.NewEncoder(w).Encode(status)
 	})
 
 	mux.HandleFunc("/cluster/join", func(w http.ResponseWriter, r *http.Request) {
@@ -218,10 +249,24 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 			w.Write([]byte("missing addr"))
 			return
 		}
-		ok := svr.AddPeer(in.Addr)
-		if !ok {
-			w.WriteHeader(http.StatusConflict)
-			w.Write([]byte("exists"))
+		normalizedAddr, err := raft.NormalizePeerAddr(in.Addr)
+		if err != nil {
+			http.Error(w, "invalid addr", http.StatusBadRequest)
+			return
+		}
+		err = svr.AddPeer(normalizedAddr)
+		if err != nil {
+			status := http.StatusInternalServerError
+			body := err.Error()
+			switch err.(type) {
+			case raft.ErrNotLeader:
+				status = http.StatusPreconditionFailed
+			case raft.ErrPeerExists:
+				status = http.StatusConflict
+			case raft.ErrInvalidPeerChange:
+				status = http.StatusBadRequest
+			}
+			http.Error(w, body, status)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -243,10 +288,24 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 			w.Write([]byte("missing addr"))
 			return
 		}
-		ok := svr.RemovePeer(in.Addr)
-		if !ok {
-			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte("not found"))
+		normalizedAddr, err := raft.NormalizePeerAddr(in.Addr)
+		if err != nil {
+			http.Error(w, "invalid addr", http.StatusBadRequest)
+			return
+		}
+		err = svr.RemovePeer(normalizedAddr)
+		if err != nil {
+			status := http.StatusInternalServerError
+			body := err.Error()
+			switch err.(type) {
+			case raft.ErrNotLeader:
+				status = http.StatusPreconditionFailed
+			case raft.ErrPeerNotFound:
+				status = http.StatusNotFound
+			case raft.ErrInvalidPeerChange:
+				status = http.StatusBadRequest
+			}
+			http.Error(w, body, status)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -273,7 +332,7 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 	mux.HandleFunc("/api/docs", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/api/docs/", http.StatusFound) })
 
 	c := cors.New(cors.Options{
-		AllowedOrigins: []string{"*"},
+		AllowedOrigins: cfg.Get().AllowedOrigins,
 		AllowedMethods: []string{
 			http.MethodHead,
 			http.MethodOptions,
@@ -286,10 +345,11 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 		AllowedHeaders: []string{
 			"Content-Type",
 			"Authorization",
+			"X-Api-Token",
 		},
-		AllowCredentials: true,
+		AllowCredentials: len(cfg.Get().AllowedOrigins) > 0,
 	})
-	handler := c.Handler(log.HttpLogger(mux, logger))
+	handler := server.HTTPAuthMiddleware(c.Handler(log.HttpLogger(mux, logger)), cfg.Get().AuthToken)
 
 	httpServer := &http.Server{
 		Handler: handler,

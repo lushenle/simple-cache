@@ -13,11 +13,6 @@ import (
 func (c *Cache) SetExpiration(key string, expire string) bool {
 	c.logger.Debug("set expiration", zap.String("key", key))
 
-	duration, err := time.ParseDuration(expire)
-	if err != nil {
-		return false
-	}
-
 	c.mu.Lock(metrics.LockWrite)
 	defer c.mu.Unlock()
 
@@ -35,13 +30,22 @@ func (c *Cache) SetExpiration(key string, expire string) bool {
 		}
 	}
 
-	// Set new expiration
+	// Empty expire means removing expiration, keeping the key persistent.
+	if expire == "" {
+		item.expiration = time.Time{}
+		return true
+	}
+
+	duration, err := time.ParseDuration(expire)
+	if err != nil {
+		return false
+	}
+
 	item.expiration = time.Now().Add(duration)
 	heap.Push(c.expirationHeap, &expirationEntry{
 		key:        key,
 		expiration: item.expiration,
 	})
-	// expirationIndex is updated by the onSwap callback during heap.Push
 	metrics.UpdateExpirationHeapSize(c.expirationHeap.Len())
 
 	return true

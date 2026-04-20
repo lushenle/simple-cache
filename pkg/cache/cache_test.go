@@ -155,3 +155,19 @@ func TestHeapMaintenance(t *testing.T) {
 	}
 	c.mu.Unlock()
 }
+
+func TestRemoveExpirationWithEmptyTTL(t *testing.T) {
+	c := newTestCache()
+	defer c.Close()
+
+	err := c.Set("persist-me", "value", "50ms")
+	assert.Nil(t, err)
+
+	updated := c.SetExpiration("persist-me", "")
+	assert.True(t, updated)
+
+	time.Sleep(80 * time.Millisecond)
+	val, found := c.Get("persist-me")
+	assert.True(t, found)
+	assert.Equal(t, "value", val)
+}

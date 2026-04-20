@@ -10,6 +10,14 @@ vet:
 test:
 	go test -v -count=1 -cover ./...
 
+.PHONY: test-race
+test-race:
+	go test -race -count=1 ./...
+
+.PHONY: test-e2e
+test-e2e:
+	go test -tags=e2e -v -count=1 ./test/e2e/...
+
 .PHONY: proto
 proto:
 	rm -f pkg/pb/*.go
@@ -30,3 +38,6 @@ docker-push:
 
 .PHONY: docker
 docker: docker-build docker-push
+
+.PHONY: ci
+ci: vet test test-race

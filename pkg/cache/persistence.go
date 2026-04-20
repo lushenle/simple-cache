@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/armon/go-radix"
+	"github.com/lushenle/simple-cache/pkg/common"
 	"github.com/lushenle/simple-cache/pkg/metrics"
 	"go.uber.org/zap"
 )
@@ -32,12 +33,12 @@ type DumpEntry struct {
 
 // DumpJSON is the top-level JSON dump structure.
 type DumpJSON struct {
-	Version      int          `json:"version"`
-	NodeID       string       `json:"node_id"`
-	DumpedAt     string       `json:"dumped_at"`
-	TotalKeys    int          `json:"total_keys"`
-	ExpiredKeys  int          `json:"expired_keys"`
-	Entries      []DumpEntry  `json:"entries"`
+	Version     int         `json:"version"`
+	NodeID      string      `json:"node_id"`
+	DumpedAt    string      `json:"dumped_at"`
+	TotalKeys   int         `json:"total_keys"`
+	ExpiredKeys int         `json:"expired_keys"`
+	Entries     []DumpEntry `json:"entries"`
 }
 
 // DumpResult contains the result of a dump operation.
@@ -52,12 +53,12 @@ type DumpResult struct {
 
 // LoadResult contains the result of a load operation.
 type LoadResult struct {
-	Success      bool
-	TotalKeys    int32
-	LoadedKeys   int32
-	SkippedKeys  int32
-	Path         string
-	DurationMs   float64
+	Success     bool
+	TotalKeys   int32
+	LoadedKeys  int32
+	SkippedKeys int32
+	Path        string
+	DurationMs  float64
 }
 
 // Dump exports all cache data to a file.
@@ -66,8 +67,8 @@ type LoadResult struct {
 func (c *Cache) Dump(nodeID, format, path string) (*DumpResult, error) {
 	switch format {
 	case "":
-		format = "binary"
-	case "binary", "json":
+		format = common.DumpFormatBinary.String()
+	case common.DumpFormatBinary.String(), common.DumpFormatJSON.String():
 	default:
 		metrics.IncPersistenceOp("dump", "error")
 		return nil, fmt.Errorf("unsupported dump format: %s", format)
@@ -78,60 +79,12 @@ func (c *Cache) Dump(nodeID, format, path string) (*DumpResult, error) {
 	start := time.Now()
 	if path == "" {
 		path = fmt.Sprintf("data/cache-%s.dump", nodeID)
-		if format == "json" {
+		if format == common.DumpFormatJSON.String() {
 			path += ".json"
 		}
 	}
 
-	c.mu.Lock(metrics.LockWrite)
-	defer c.mu.Unlock()
-
-	// Collect all entries
-	entries := make([]DumpEntry, 0, len(c.items))
-	now := time.Now()
-	expiredCount := 0
-	for key, item := range c.items {
-		// Skip already-expired entries
-		if !item.expiration.IsZero() && now.After(item.expiration) {
-			expiredCount++
-			continue
-		}
-
-		val, valType := serializeValue(item.value)
-		entry := DumpEntry{
-			Key:           key,
-			Value:         val,
-			ValueType:     valType,
-			HasExpiration: !item.expiration.IsZero(),
-		}
-		if entry.HasExpiration {
-			entry.Expiration = item.expiration.UTC().Format(time.RFC3339Nano)
-		}
-		entries = append(entries, entry)
-	}
-
-	// Sort entries by key for deterministic output
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Key < entries[j].Key
-	})
-
-	var data []byte
-	var err error
-
-	switch format {
-	case "json":
-		dump := DumpJSON{
-			Version:     dumpVersion,
-			NodeID:      nodeID,
-			DumpedAt:    time.Now().UTC().Format(time.RFC3339Nano),
-			TotalKeys:   len(entries),
-			ExpiredKeys: expiredCount,
-			Entries:     entries,
-		}
-		data, err = json.MarshalIndent(dump, "", "  ")
-	default:
-		data, err = encodeBinaryDump(entries)
-	}
+	data, entries, expiredCount, err := c.dumpToBytes(nodeID, format)
 
 	if err != nil {
 		metrics.IncPersistenceOp("dump", "error")
@@ -216,6 +169,11 @@ func (c *Cache) Dump(nodeID, format, path string) (*DumpResult, error) {
 	}, nil
 }
 
+func (c *Cache) DumpToBytes(nodeID, format string) ([]byte, error) {
+	data, _, _, err := c.dumpToBytes(nodeID, format)
+	return data, err
+}
+
 // Load imports cache data from a file.
 // path: file path, empty means auto-detect default (tries binary first, then json)
 func (c *Cache) Load(nodeID, path string) (*LoadResult, error) {
@@ -245,32 +203,101 @@ func (c *Cache) Load(nodeID, path string) (*LoadResult, error) {
 		return nil, fmt.Errorf("read dump file: %w", err)
 	}
 
+	result, err := c.LoadFromBytes(nodeID, data)
+	if err != nil {
+		metrics.IncPersistenceOp("load", "error")
+		return nil, err
+	}
+
+	result.Path = path
+	result.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+	return result, nil
+}
+
+// DefaultDumpPath returns the default dump file path for the given nodeID and format.
+func DefaultDumpPath(nodeID, format, dataDir string) string {
+	if dataDir == "" {
+		dataDir = "data"
+	}
+	path := filepath.Join(dataDir, fmt.Sprintf("cache-%s.dump", nodeID))
+	if format == common.DumpFormatJSON.String() {
+		path += ".json"
+	}
+	return path
+}
+
+func (c *Cache) dumpToBytes(nodeID, format string) ([]byte, []DumpEntry, int, error) {
+	c.mu.Lock(metrics.LockWrite)
+	defer c.mu.Unlock()
+
+	entries := make([]DumpEntry, 0, len(c.items))
+	now := time.Now()
+	expiredCount := 0
+	for key, item := range c.items {
+		if !item.expiration.IsZero() && now.After(item.expiration) {
+			expiredCount++
+			continue
+		}
+
+		val, valType := serializeValue(item.value)
+		entry := DumpEntry{
+			Key:           key,
+			Value:         val,
+			ValueType:     valType,
+			HasExpiration: !item.expiration.IsZero(),
+		}
+		if entry.HasExpiration {
+			entry.Expiration = item.expiration.UTC().Format(time.RFC3339Nano)
+		}
+		entries = append(entries, entry)
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Key < entries[j].Key
+	})
+
+	var data []byte
+	var err error
+	switch format {
+	case common.DumpFormatJSON.String():
+		dump := DumpJSON{
+			Version:     dumpVersion,
+			NodeID:      nodeID,
+			DumpedAt:    time.Now().UTC().Format(time.RFC3339Nano),
+			TotalKeys:   len(entries),
+			ExpiredKeys: expiredCount,
+			Entries:     entries,
+		}
+		data, err = json.MarshalIndent(dump, "", "  ")
+	default:
+		data, err = encodeBinaryDump(entries)
+	}
+	return data, entries, expiredCount, err
+}
+
+func (c *Cache) LoadFromBytes(nodeID string, data []byte) (*LoadResult, error) {
 	var entries []DumpEntry
 	format := "unknown"
 
-	// Detect format
 	if len(data) >= 4 && string(data[:4]) == dumpMagic {
+		var err error
 		entries, err = decodeBinaryDump(data)
-		format = "binary"
+		if err != nil {
+			return nil, fmt.Errorf("parse dump file: %w", err)
+		}
+		format = common.DumpFormatBinary.String()
 	} else {
 		var dump DumpJSON
 		if err := json.Unmarshal(data, &dump); err != nil {
-			metrics.IncPersistenceOp("load", "error")
 			return nil, fmt.Errorf("parse dump file: %w", err)
 		}
 		entries = dump.Entries
-		format = "json"
-	}
-
-	if err != nil {
-		metrics.IncPersistenceOp("load", "error")
-		return nil, fmt.Errorf("parse dump file: %w", err)
+		format = common.DumpFormatJSON.String()
 	}
 
 	c.mu.Lock(metrics.LockWrite)
 	defer c.mu.Unlock()
 
-	// Clear existing data before loading (inline reset to avoid deadlock with separate Reset() call)
 	c.items = make(map[string]*Item)
 	c.prefixTree = radix.New()
 	c.expirationHeap = &ExpirationHeap{onSwap: c.expirationHeap.onSwap}
@@ -280,7 +307,6 @@ func (c *Cache) Load(nodeID, path string) (*LoadResult, error) {
 	now := time.Now()
 	loaded := 0
 	skipped := 0
-
 	for _, entry := range entries {
 		var expiration time.Time
 		if entry.HasExpiration && entry.Expiration != "" {
@@ -291,8 +317,6 @@ func (c *Cache) Load(nodeID, path string) (*LoadResult, error) {
 				continue
 			}
 			expiration = exp
-
-			// Skip already-expired entries
 			if now.After(expiration) {
 				skipped++
 				continue
@@ -300,8 +324,6 @@ func (c *Cache) Load(nodeID, path string) (*LoadResult, error) {
 		}
 
 		value := deserializeValue(entry.Value, entry.ValueType)
-
-		// Use setInternal to add to all data structures
 		c.setInternal(entry.Key, &Item{
 			value:      value,
 			expiration: expiration,
@@ -320,38 +342,22 @@ func (c *Cache) Load(nodeID, path string) (*LoadResult, error) {
 	metrics.UpdateKeysTotal(len(c.items))
 	metrics.UpdateExpirationHeapSize(c.expirationHeap.Len())
 	metrics.IncPersistenceOp("load", "success")
-	metrics.ObservePersistenceDuration("load", time.Since(start).Seconds())
 	metrics.SetLoadKeys(int64(loaded), int64(skipped))
 
-	durationMs := float64(time.Since(start).Microseconds()) / 1000.0
 	c.logger.Info("cache load completed",
-		zap.String("path", path),
+		zap.String("path", "memory"),
 		zap.String("format", format),
 		zap.Int("loaded", loaded),
 		zap.Int("skipped", skipped),
-		zap.Duration("duration", time.Since(start)),
 	)
 
 	return &LoadResult{
-		Success:      true,
-		TotalKeys:    int32(len(entries)),
-		LoadedKeys:   int32(loaded),
-		SkippedKeys:  int32(skipped),
-		Path:         path,
-		DurationMs:   durationMs,
+		Success:     true,
+		TotalKeys:   int32(len(entries)),
+		LoadedKeys:  int32(loaded),
+		SkippedKeys: int32(skipped),
+		Path:        "memory",
 	}, nil
-}
-
-// DefaultDumpPath returns the default dump file path for the given nodeID and format.
-func DefaultDumpPath(nodeID, format, dataDir string) string {
-	if dataDir == "" {
-		dataDir = "data"
-	}
-	path := filepath.Join(dataDir, fmt.Sprintf("cache-%s.dump", nodeID))
-	if format == "json" {
-		path += ".json"
-	}
-	return path
 }
 
 // --- Binary format encoding/decoding ---

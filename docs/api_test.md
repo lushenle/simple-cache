@@ -51,6 +51,13 @@ curl -X POST http://localhost:8080/v1/test_key/expire \
 {"success":true, "existed":true}
 ```
 
+移除过期时间（设为永不过期）：
+```bash
+curl -X POST http://localhost:8080/v1/test_key/expire \
+  -H "Content-Type: application/json" \
+  -d '{"expire":""}'
+```
+
 ### 4. 删除键值对 (Delete)
 
 首先创建一个新的键值对：
@@ -117,6 +124,8 @@ curl -X POST http://localhost:8080/v1/dump \
 
 ### 导入缓存数据 (Load)
 
+> `Load` 仅 single 模式允许；distributed 模式会返回 `FailedPrecondition`。
+
 从默认路径加载（自动检测 binary/json）：
 ```bash
 curl -X POST http://localhost:8080/v1/load \
@@ -142,15 +151,32 @@ curl -X POST http://localhost:8080/v1/load \
 curl -X GET http://localhost:8080/healthz
 ```
 
+示例响应：
+```json
+{"status":"ok","mode":"single","ready":true,"role":"single"}
+```
+
 ## 集群状态
 
 ```bash
 curl -X GET http://localhost:8080/readyz
 ```
 
+single 模式示例响应：
+```json
+{"status":"ok","mode":"single","ready":true,"role":"single"}
+```
+
+distributed follower 示例响应（HTTP 503）：
+```json
+{"status":"not_ready","mode":"distributed","ready":false,"role":"follower","leader_id":"node-1"}
+```
+
 ```bash
 curl -X GET http://localhost:8080/cluster/peers
 ```
+
+> 如配置了 `auth_token`，请为写接口、`/cluster/*` 以及 dump/load 请求加上 `X-Api-Token` 或 `Authorization: Bearer <token>` 头。
 
 ## API 文档
 

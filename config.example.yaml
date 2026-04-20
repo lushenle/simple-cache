@@ -1,14 +1,44 @@
+# 运行模式:
+# - single: 单节点模式，支持 Dump/Load 恢复
+# - distributed: 分布式模式，恢复依赖 Raft snapshot + WAL replay
 mode: single
+
+# 节点标识
 node_id: node-1
+
+# 服务监听地址
 grpc_addr: ":5051"
 http_addr: ":8080"
 raft_http_addr: ":9090"
 metrics_addr: ":2112"
+
+# distributed 模式下的 Raft 节点列表，格式必须为 http(s)://host:port
 peers: []
+
+# Raft 定时参数（distributed 模式生效）
 heartbeat_ms: 200
 election_ms: 1200
+
+# 配置热重载（当前仅部分运行时行为会读取最新配置）
 hot_reload: false
+
+# single 模式下的缓存持久化
 load_on_startup: true
 dump_on_shutdown: true
 dump_format: binary
 data_dir: data
+
+# 管理面与写接口鉴权
+auth_token: ""
+
+# gRPC TLS
+enable_tls: false
+tls_cert_file: ""
+tls_key_file: ""
+
+# HTTP CORS 白名单；为空表示不放开跨域
+allowed_origins: []
+
+# Raft snapshot / log compaction（distributed 模式生效）
+snapshot_enabled: true
+snapshot_threshold: 1024

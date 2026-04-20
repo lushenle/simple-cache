@@ -11,3 +11,14 @@ peers:
 heartbeat_ms: 200
 election_ms: 1200
 hot_reload: false
+load_on_startup: false
+dump_on_shutdown: false
+dump_format: binary
+data_dir: data/node3
+auth_token: ""
+enable_tls: false
+tls_cert_file: ""
+tls_key_file: ""
+allowed_origins: []
+snapshot_enabled: true
+snapshot_threshold: 1024
