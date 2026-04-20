@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/lushenle/simple-cache/pkg/cache"
+	"github.com/lushenle/simple-cache/pkg/common"
 )
 
 type Command interface {
@@ -29,4 +30,13 @@ func (f *FSM) Apply(cmd interface{}) (interface{}, error) {
 	}
 
 	return realCmd.Apply(f.Cache)
+}
+
+func (f *FSM) Snapshot(nodeID string) ([]byte, error) {
+	return f.Cache.DumpToBytes(nodeID, common.DumpFormatBinary.String())
+}
+
+func (f *FSM) RestoreSnapshot(nodeID string, data []byte) error {
+	_, err := f.Cache.LoadFromBytes(nodeID, data)
+	return err
 }

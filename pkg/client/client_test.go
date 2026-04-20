@@ -170,6 +170,32 @@ func TestClient_NewDefault(t *testing.T) {
 	}
 }
 
+func TestClient_NewRequiresExplicitCredsWhenDialOptionsProvided(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	cli, err := New(ctx, "bufnet", grpc.WithContextDialer(bufDialer))
+	assert.Error(t, err)
+	assert.Nil(t, cli)
+}
+
+func TestClient_NewSecureMissingCert(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	cli, err := NewSecure(ctx, "bufnet", "/path/does/not/exist.pem")
+	assert.Error(t, err)
+	assert.Nil(t, cli)
+}
+
 func TestClient_GetSet(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode")
@@ -208,8 +234,6 @@ func TestClient_GetSet(t *testing.T) {
 
 	t.Run("SetWithNegativeTTL", func(t *testing.T) {
 		key := "negative-ttl-key"
-		// Behavior of negative TTL depends on server's cache implementation (and formatTTL).
-		// formatTTL turns negative into "", which cache might treat as no expiry.
 		err := cli.Set(ctx, key, "somevalue", -5*time.Second)
 		assert.NoError(t, err)
 
@@ -217,6 +241,22 @@ func TestClient_GetSet(t *testing.T) {
 		assert.NoError(t, err)
 		assert.True(t, found)
 		assert.Equal(t, "somevalue", val)
+	})
+
+	t.Run("ExpireKeyWithNonPositiveTTLRemovesExpiration", func(t *testing.T) {
+		key := "expire-remove-key"
+		err := cli.Set(ctx, key, "value", 100*time.Millisecond)
+		assert.NoError(t, err)
+
+		existed, err := cli.ExpireKey(ctx, key, 0)
+		assert.NoError(t, err)
+		assert.True(t, existed)
+
+		time.Sleep(150 * time.Millisecond)
+		val, found, err := cli.Get(ctx, key)
+		assert.NoError(t, err)
+		assert.True(t, found)
+		assert.Equal(t, "value", val)
 	})
 }
 

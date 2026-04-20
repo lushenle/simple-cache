@@ -47,3 +47,21 @@ func TestDelCommand(t *testing.T) {
 	resp, _ = cmd.Apply(c)
 	assert.False(t, resp.(*pb.DelResponse).Existed)
 }
+
+func TestExpireKeyCommand(t *testing.T) {
+	plugin := log.NewStdoutPlugin(zapcore.DebugLevel)
+	logger := log.NewLogger(plugin)
+
+	c := cache.New(time.Second*3, logger)
+	err := c.Set("k1", "value", "1h")
+	assert.Nil(t, err)
+
+	cmd := &ExpireKeyCommand{Key: "k1", Expire: ""}
+	resp, err := cmd.Apply(c)
+	assert.Nil(t, err)
+	assert.True(t, resp.(*pb.ExpireKeyResponse).Existed)
+
+	time.Sleep(20 * time.Millisecond)
+	_, found := c.Get("k1")
+	assert.True(t, found)
+}

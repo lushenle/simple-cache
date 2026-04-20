@@ -2,8 +2,11 @@ package client
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -11,7 +14,9 @@ import (
 	"github.com/lushenle/simple-cache/pkg/utils"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 type Client struct {
@@ -22,8 +27,10 @@ type Client struct {
 // New creates a new client instance
 func New(ctx context.Context, addr string, opts ...grpc.DialOption) (*Client, error) {
 	defaultOpts := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: 5 * time.Second}),
+	}
+	if len(opts) == 0 {
+		defaultOpts = append(defaultOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 
 	opts = append(defaultOpts, opts...)
@@ -50,6 +57,24 @@ func New(ctx context.Context, addr string, opts ...grpc.DialOption) (*Client, er
 
 func NewDefault(addr string, opts ...grpc.DialOption) (*Client, error) {
 	return New(context.Background(), addr, opts...)
+}
+
+func NewSecure(ctx context.Context, addr, certFile string, opts ...grpc.DialOption) (*Client, error) {
+	pool := x509.NewCertPool()
+	pemData, err := os.ReadFile(certFile)
+	if err != nil {
+		return nil, err
+	}
+	if !pool.AppendCertsFromPEM(pemData) {
+		return nil, fmt.Errorf("failed to append certs from %s", certFile)
+	}
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    pool,
+	}
+	return New(ctx, addr, append([]grpc.DialOption{
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
+	}, opts...)...)
 }
 
 // ensureConnected optionally validates connection readiness following gRPC best practices.
@@ -177,6 +202,13 @@ func formatTTL(d time.Duration) string {
 	}
 
 	return d.String()
+}
+
+func WithAuthToken(ctx context.Context, token string) context.Context {
+	if token == "" {
+		return ctx
+	}
+	return metadata.AppendToOutgoingContext(ctx, "x-api-token", token)
 }
 
 // BatchSet sets multiple key-value pairs in the cache with a specified TTL.

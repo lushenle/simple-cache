@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 720">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2563eb" />
+    </marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#000000" flood-opacity="0.12"/>
+    </filter>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif; }
+      .title { font-size: 24px; font-weight: 700; fill: #111827; }
+      .subtitle { font-size: 12px; fill: #4b5563; }
+      .group { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.5; stroke-dasharray: 6 4; rx: 18; }
+      .node { rx: 14; stroke-width: 1.5; filter: url(#shadow); }
+      .label { font-size: 14px; font-weight: 600; fill: #111827; text-anchor: middle; }
+      .small { font-size: 11px; fill: #475569; text-anchor: middle; }
+      .arrow { stroke: #2563eb; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .dashed { stroke-dasharray: 6 4; }
+      .legend { font-size: 11px; fill: #334155; }
+    </style>
+  </defs>
+  <rect width="960" height="720" fill="#ffffff"/>
+  <text x="480" y="36" class="title" text-anchor="middle">Simple-Cache 当前架构总览</text>
+  <text x="480" y="58" class="subtitle" text-anchor="middle">包含双协议接入、鉴权/TLS、Raft snapshot/compaction、single/distributed 两条恢复路径</text>
+  <rect x="36" y="96" width="190" height="150" class="group"/>
+  <text x="131" y="118" class="label">客户端</text>
+  <rect x="60" y="140" width="140" height="42" class="node" fill="#dbeafe" stroke="#60a5fa"/>
+  <text x="130" y="165" class="label">Go SDK / gRPC</text>
+  <rect x="60" y="195" width="140" height="42" class="node" fill="#dbeafe" stroke="#60a5fa"/>
+  <text x="130" y="220" class="label">HTTP Client</text>
+  <rect x="252" y="84" width="660" height="600" class="group"/>
+  <text x="582" y="106" class="label">Simple-Cache 节点</text>
+  <rect x="280" y="130" width="604" height="100" class="group"/>
+  <text x="582" y="152" class="label">接入与安全层</text>
+  <rect x="300" y="170" width="168" height="42" class="node" fill="#bfdbfe" stroke="#3b82f6"/>
+  <text x="384" y="193" class="label">HTTP Gateway</text>
+  <text x="384" y="207" class="small">grpc-gateway / Swagger</text>
+  <rect x="498" y="170" width="168" height="42" class="node" fill="#bfdbfe" stroke="#3b82f6"/>
+  <text x="582" y="193" class="label">gRPC Server</text>
+  <text x="582" y="207" class="small">TLS + Unary Auth</text>
+  <rect x="696" y="170" width="168" height="42" class="node" fill="#dcfce7" stroke="#22c55e"/>
+  <text x="780" y="193" class="label">Metrics Server</text>
+  <text x="780" y="207" class="small">/metrics 独立端口</text>
+  <rect x="280" y="254" width="604" height="92" class="group"/>
+  <text x="582" y="276" class="label">服务层</text>
+  <rect x="330" y="296" width="220" height="36" class="node" fill="#fde68a" stroke="#f59e0b"/>
+  <text x="440" y="317" class="label">CacheService</text>
+  <text x="440" y="329" class="small">命令分发 / 探针</text>
+  <rect x="582" y="296" width="220" height="36" class="node" fill="#fef3c7" stroke="#f59e0b"/>
+  <text x="692" y="317" class="label">FSM</text>
+  <text x="692" y="329" class="small">Apply / Snapshot / Restore</text>
+  <rect x="280" y="370" width="604" height="150" class="group"/>
+  <text x="582" y="392" class="label">共识与恢复层</text>
+  <rect x="300" y="430" width="168" height="46" class="node" fill="#fecaca" stroke="#ef4444"/>
+  <text x="384" y="455" class="label">Raft Node</text>
+  <text x="384" y="469" class="small">Election / Replication</text>
+  <rect x="498" y="430" width="168" height="46" class="node" fill="#fee2e2" stroke="#ef4444"/>
+  <text x="582" y="455" class="label">WAL Storage</text>
+  <text x="582" y="469" class="small">Append / Replay / Compact</text>
+  <rect x="696" y="430" width="168" height="46" class="node" fill="#fee2e2" stroke="#ef4444"/>
+  <text x="780" y="455" class="label">Snapshot Store</text>
+  <text x="780" y="469" class="small">Save / Load / Install</text>
+  <rect x="280" y="544" width="604" height="118" class="group"/>
+  <text x="582" y="566" class="label">缓存与持久化层</text>
+  <rect x="300" y="598" width="168" height="42" class="node" fill="#d1fae5" stroke="#10b981"/>
+  <text x="384" y="621" class="label">Cache Engine</text>
+  <text x="384" y="635" class="small">HashMap + Radix + TTL Heap</text>
+  <rect x="498" y="598" width="168" height="42" class="node" fill="#d1fae5" stroke="#10b981"/>
+  <text x="582" y="621" class="label">Dump / Load</text>
+  <text x="582" y="635" class="small">single 模式缓存持久化</text>
+  <rect x="696" y="598" width="168" height="42" class="node" fill="#ede9fe" stroke="#8b5cf6"/>
+  <text x="780" y="621" class="label">Config / Log</text>
+  <text x="780" y="635" class="small">AtomicConfig / Zap</text>
+  <path d="M200 161 L300 161" class="arrow"/>
+  <path d="M200 216 L300 216 L300 191" class="arrow"/>
+  <path d="M384 212 L384 296" class="arrow"/>
+  <path d="M608 212 L608 296" class="arrow"/>
+  <path d="M440 314 L582 314" class="arrow"/>
+  <path d="M440 314 L440 430" class="arrow"/>
+  <path d="M692 314 L692 430" class="arrow"/>
+  <path d="M384 476 L384 598" class="arrow"/>
+  <path d="M582 476 L582 598" class="arrow"/>
+  <path d="M692 476 L692 598" class="arrow"/>
+  <path d="M468 453 L498 453" class="arrow"/>
+  <path d="M666 453 L696 453" class="arrow"/>
+  <rect x="214" y="148" width="56" height="18" rx="6" fill="#ffffff" opacity="0.96"/>
+  <text x="242.0" y="161" class="small">gRPC</text>
+  <rect x="214" y="205" width="56" height="18" rx="6" fill="#ffffff" opacity="0.96"/>
+  <text x="242.0" y="218" class="small">REST</text>
+  <rect x="452" y="278" width="90" height="18" rx="6" fill="#ffffff" opacity="0.96"/>
+  <text x="497.0" y="291" class="small">单机写/读</text>
+  <rect x="356" y="380" width="86" height="18" rx="6" fill="#ffffff" opacity="0.96"/>
+  <text x="399.0" y="393" class="small">分布式写</text>
+  <rect x="512" y="407" width="116" height="18" rx="6" fill="#ffffff" opacity="0.96"/>
+  <text x="570.0" y="420" class="small">snapshot + replay</text>
+  <rect x="60" y="270" width="140" height="168" class="group"/>
+  <text x="130" y="292" class="label">恢复语义</text>
+  <text x="74" y="320" class="legend">• single 模式</text>
+  <text x="82" y="334" class="legend">Load/Dump 直接走 Cache</text>
+  <text x="74" y="348" class="legend">• distributed 模式</text>
+  <text x="82" y="362" class="legend">Load 禁用, 依赖 Raft</text>
+  <text x="74" y="376" class="legend">• readyz</text>
+  <text x="82" y="390" class="legend">Leader=200, Follower=503</text>
+  <text x="74" y="404" class="legend">• TTL 契约</text>
+  <text x="82" y="418" class="legend">ttl&lt;=0 表示移除过期</text>
+</svg>
