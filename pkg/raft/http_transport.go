@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,7 +18,7 @@ import (
 
 // raftHTTPClient is a shared HTTP client with timeout and connection pooling.
 var raftHTTPClient = &http.Client{
-	Timeout: 1 * time.Second,
+	Timeout: 10 * time.Second,
 	Transport: &http.Transport{
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 10,
@@ -33,19 +34,22 @@ type HTTPTransport struct {
 	httpSrv *http.Server
 }
 
-func NewHTTPTransport(addr string, peers []string) *HTTPTransport {
+func NewHTTPTransport(addr string, peers []string, logger *zap.Logger) (*HTTPTransport, error) {
 	normalized := make([]string, 0, len(peers))
 	for _, peer := range peers {
 		value, err := NormalizePeerAddr(peer)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("invalid peer %q: %w", peer, err)
 		}
 		if containsPeer(normalized, value) {
+			if logger != nil {
+				logger.Warn("duplicate peer ignored", zap.String("peer", peer))
+			}
 			continue
 		}
 		normalized = append(normalized, value)
 	}
-	return &HTTPTransport{addr: addr, peers: normalized}
+	return &HTTPTransport{addr: addr, peers: normalized}, nil
 }
 
 func (t *HTTPTransport) Start(node *Node) {
@@ -106,7 +110,7 @@ func (t *HTTPTransport) Close() {
 	}
 }
 
-func (t *HTTPTransport) sendAppend(ctx context.Context, peer string, req AppendEntriesReq) (AppendEntriesResp, error) { // ignore_security_alert // ignore_security_alert // ignore_security_alert // ignore_security_alert // ignore_security_alert // ignore_security_alert // ignore_security_alert
+func (t *HTTPTransport) sendAppend(ctx context.Context, peer string, req AppendEntriesReq) (AppendEntriesResp, error) {
 	b, err := json.Marshal(req)
 	if err != nil {
 		return AppendEntriesResp{}, err
@@ -278,21 +282,33 @@ func (t *HTTPTransport) isSelf(peer string) bool {
 	if err != nil {
 		return false
 	}
-	peerHost := peerURL.Host
 
 	selfURL, err := url.Parse("http://" + t.addr)
 	if err != nil {
 		return false
 	}
-	selfHost := selfURL.Host
 
-	// Normalize: if no IP specified, use localhost
-	if _, _, err := net.SplitHostPort(peerHost); err != nil {
-		peerHost = "localhost" + peerHost
-	}
-	if _, _, err := net.SplitHostPort(selfHost); err != nil {
-		selfHost = "localhost" + selfHost
+	peerHost, peerPort, _ := net.SplitHostPort(peerURL.Host)
+	selfHost, selfPort, _ := net.SplitHostPort(selfURL.Host)
+
+	if peerPort != selfPort {
+		return false
 	}
 
-	return peerHost == selfHost
+	// When the bind address has no explicit host (e.g. ":9090"), it listens
+	// on all interfaces, so any loopback peer with the same port is self.
+	if selfHost == "" || selfHost == "0.0.0.0" || selfHost == "::" {
+		return isLoopback(peerHost)
+	}
+
+	return strings.EqualFold(peerHost, selfHost)
+}
+
+// isLoopback reports whether host is a loopback address or "localhost".
+func isLoopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

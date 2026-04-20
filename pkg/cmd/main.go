@@ -93,7 +93,8 @@ func main() {
 	var raftNode *raft.Node
 	if cfg.Mode == common.ModeDistributed {
 		st := raft.NewStorage(filepath.Join(cfg.DataDir, "raft-"+cfg.NodeID+".wal"))
-		raftNode = raft.NewNode(
+		var err error
+		raftNode, err = raft.NewNode(
 			cfg.NodeID,
 			cfg.RaftHTTPAddr,
 			cfg.Peers,
@@ -105,6 +106,9 @@ func main() {
 			cfg.SnapshotThreshold,
 			logger,
 		)
+		if err != nil {
+			logger.Fatal("failed to create raft node", zap.Error(err))
+		}
 		srv.UseRaft(raftNode)
 	}
 

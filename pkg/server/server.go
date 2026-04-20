@@ -56,7 +56,7 @@ func (s *CacheService) RestoreSnapshot(nodeID string, data []byte) error {
 
 func (s *CacheService) Role() string {
 	if s.node == nil {
-		return "leader"
+		return "single"
 	}
 	return string(s.node.Role())
 }

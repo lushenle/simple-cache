@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -74,7 +75,7 @@ type Node struct {
 	logger *zap.Logger
 }
 
-func NewNode(id string, addr string, peers []string, storage *Storage, applier Applier, heartbeat, election time.Duration, snapshotEnabled bool, snapshotThreshold uint64, logger *zap.Logger) *Node {
+func NewNode(id string, addr string, peers []string, storage *Storage, applier Applier, heartbeat, election time.Duration, snapshotEnabled bool, snapshotThreshold uint64, logger *zap.Logger) (*Node, error) {
 	n := &Node{
 		id:                id,
 		storage:           storage,
@@ -93,7 +94,10 @@ func NewNode(id string, addr string, peers []string, storage *Storage, applier A
 	metrics.SetRaftRole(n.id, string(Follower))
 	n.leaderID.Store("")
 
-	meta, _ := storage.LoadMeta()
+	meta, err := storage.LoadMeta()
+	if err != nil {
+		return nil, fmt.Errorf("load meta: %w", err)
+	}
 	if meta != nil {
 		n.term = meta.CurrentTerm
 		n.votedFor = meta.VotedFor
@@ -105,15 +109,24 @@ func NewNode(id string, addr string, peers []string, storage *Storage, applier A
 		}
 	}
 
-	if snapshotMeta, snapshotData, err := storage.LoadSnapshot(); err == nil && snapshotMeta != nil {
+	snapshotMeta, snapshotData, err := storage.LoadSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("load snapshot: %w", err)
+	}
+	if snapshotMeta != nil {
 		n.snapshotIndex = snapshotMeta.LastIncludedIndex
 		n.snapshotTerm = snapshotMeta.LastIncludedTerm
 		if snapshotter, ok := applier.(SnapshotProvider); ok && len(snapshotData) > 0 {
-			_ = snapshotter.RestoreSnapshot(id, snapshotData)
+			if err := snapshotter.RestoreSnapshot(id, snapshotData); err != nil {
+				return nil, fmt.Errorf("restore snapshot: %w", err)
+			}
 		}
 	}
 
-	entries, _ := storage.LoadEntries()
+	entries, err := storage.LoadEntries()
+	if err != nil {
+		return nil, fmt.Errorf("load entries: %w", err)
+	}
 	n.logs = append(n.logs, entries...)
 	n.recomputeLastLogLocked()
 	if n.commitIdx < n.snapshotIndex {
@@ -126,7 +139,11 @@ func NewNode(id string, addr string, peers []string, storage *Storage, applier A
 		n.commitIdx = n.lastLogIndex
 	}
 
-	n.trans = NewHTTPTransport(addr, peers)
+	trans, err := NewHTTPTransport(addr, peers, logger)
+	if err != nil {
+		return nil, fmt.Errorf("raft transport: %w", err)
+	}
+	n.trans = trans
 	n.trans.Start(n)
 	metrics.SetPeersTotal(len(n.trans.Peers()))
 
@@ -139,7 +156,7 @@ func NewNode(id string, addr string, peers []string, storage *Storage, applier A
 	n.wg.Add(2)
 	go n.loop()
 	go n.electionLoop()
-	return n
+	return n, nil
 }
 
 // Close stops the raft node background goroutines and closes the transport.

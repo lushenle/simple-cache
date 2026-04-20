@@ -13,6 +13,7 @@ import (
 	"github.com/lushenle/simple-cache/pkg/raft"
 	"github.com/lushenle/simple-cache/pkg/utils"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -56,7 +57,7 @@ func TestGRPCServer(t *testing.T) {
 
 	t.Run("LoadDisabledInDistributedMode", func(t *testing.T) {
 		transportAddr := "127.0.0.1:0"
-		node := raft.NewNode(
+		node, err := raft.NewNode(
 			"test-node",
 			transportAddr,
 			[]string{"http://" + transportAddr},
@@ -68,10 +69,11 @@ func TestGRPCServer(t *testing.T) {
 			8,
 			logger,
 		)
+		require.NoError(t, err)
 		defer node.Close()
 		srv.UseRaft(node)
 
-		_, err := srv.Load(context.Background(), &pb.LoadRequest{})
+		_, err = srv.Load(context.Background(), &pb.LoadRequest{})
 		assert.Error(t, err)
 		st, ok := status.FromError(err)
 		assert.True(t, ok)
@@ -92,7 +94,7 @@ func TestGRPCServer(t *testing.T) {
 
 	t.Run("ProbeStatusDistributedFollowerNotReady", func(t *testing.T) {
 		transportAddr := "127.0.0.1:0"
-		node := raft.NewNode(
+		node, err := raft.NewNode(
 			"test-node-follower",
 			transportAddr,
 			[]string{"http://" + transportAddr, "http://" + transportAddr},
@@ -104,6 +106,7 @@ func TestGRPCServer(t *testing.T) {
 			8,
 			logger,
 		)
+		require.NoError(t, err)
 		defer node.Close()
 		srv.UseRaft(node)
 

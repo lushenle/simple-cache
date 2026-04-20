@@ -211,6 +211,7 @@ func (c *Cache) Load(nodeID, path string) (*LoadResult, error) {
 
 	result.Path = path
 	result.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+	metrics.ObservePersistenceDuration("load", time.Since(start).Seconds())
 	return result, nil
 }
 

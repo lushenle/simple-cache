@@ -133,15 +133,18 @@ func TestNodeReplicationAndFailover(t *testing.T) {
 	applier2 := newFakeApplier()
 	applier3 := newFakeApplier()
 
-	n1 := NewNode("n1", addr1, peers, NewStorage(filepath.Join(baseDir, "n1.wal")), applier1, 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
-	n2 := NewNode("n2", addr2, peers, NewStorage(filepath.Join(baseDir, "n2.wal")), applier2, 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
-	n3 := NewNode("n3", addr3, peers, NewStorage(filepath.Join(baseDir, "n3.wal")), applier3, 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
+	n1, err := NewNode("n1", addr1, peers, NewStorage(filepath.Join(baseDir, "n1.wal")), applier1, 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
+	require.NoError(t, err)
+	n2, err := NewNode("n2", addr2, peers, NewStorage(filepath.Join(baseDir, "n2.wal")), applier2, 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
+	require.NoError(t, err)
+	n3, err := NewNode("n3", addr3, peers, NewStorage(filepath.Join(baseDir, "n3.wal")), applier3, 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
+	require.NoError(t, err)
 	defer n1.Close()
 	defer n2.Close()
 	defer n3.Close()
 
 	leader := waitForLeader(t, n1, n2, n3)
-	_, err := leader.Submit(&command.SetCommand{Key: "k1", Value: "v1"})
+	_, err = leader.Submit(&command.SetCommand{Key: "k1", Value: "v1"})
 	require.NoError(t, err)
 
 	waitForCondition(t, func() bool {
@@ -187,15 +190,17 @@ func TestNodeReplayCommittedEntriesOnRestart(t *testing.T) {
 
 	applier := newFakeApplier()
 	walPath := filepath.Join(baseDir, "node.wal")
-	node := NewNode("node-1", addr, peers, NewStorage(walPath), applier, 80*time.Millisecond, 180*time.Millisecond, true, 2, logger)
+	node, err := NewNode("node-1", addr, peers, NewStorage(walPath), applier, 80*time.Millisecond, 180*time.Millisecond, true, 2, logger)
+	require.NoError(t, err)
 	leader := waitForLeader(t, node)
-	_, err := leader.Submit(&command.SetCommand{Key: "persisted", Value: "value"})
+	_, err = leader.Submit(&command.SetCommand{Key: "persisted", Value: "value"})
 	require.NoError(t, err)
 	waitForCondition(t, func() bool { return applier.Has("persisted") })
 	node.Close()
 
 	restarted := newFakeApplier()
-	node2 := NewNode("node-1", addr, peers, NewStorage(walPath), restarted, 80*time.Millisecond, 180*time.Millisecond, true, 2, logger)
+	node2, err := NewNode("node-1", addr, peers, NewStorage(walPath), restarted, 80*time.Millisecond, 180*time.Millisecond, true, 2, logger)
+	require.NoError(t, err)
 	defer node2.Close()
 
 	waitForCondition(t, func() bool { return restarted.Has("persisted") })
@@ -215,9 +220,12 @@ func TestNodeReplicatesPeerChange(t *testing.T) {
 		"http://" + addr3,
 	}
 
-	n1 := NewNode("n1", addr1, peers, NewStorage(filepath.Join(baseDir, "n1.wal")), newFakeApplier(), 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
-	n2 := NewNode("n2", addr2, peers, NewStorage(filepath.Join(baseDir, "n2.wal")), newFakeApplier(), 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
-	n3 := NewNode("n3", addr3, peers, NewStorage(filepath.Join(baseDir, "n3.wal")), newFakeApplier(), 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
+	n1, err := NewNode("n1", addr1, peers, NewStorage(filepath.Join(baseDir, "n1.wal")), newFakeApplier(), 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
+	require.NoError(t, err)
+	n2, err := NewNode("n2", addr2, peers, NewStorage(filepath.Join(baseDir, "n2.wal")), newFakeApplier(), 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
+	require.NoError(t, err)
+	n3, err := NewNode("n3", addr3, peers, NewStorage(filepath.Join(baseDir, "n3.wal")), newFakeApplier(), 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
+	require.NoError(t, err)
 	defer n1.Close()
 	defer n2.Close()
 	defer n3.Close()
@@ -248,14 +256,16 @@ func TestNodeSubmitWithUnreachablePeerDoesNotBlockTooLong(t *testing.T) {
 		ghost,
 	}
 
-	n1 := NewNode("n1", addr1, peers, NewStorage(filepath.Join(baseDir, "n1.wal")), newFakeApplier(), 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
-	n2 := NewNode("n2", addr2, peers, NewStorage(filepath.Join(baseDir, "n2.wal")), newFakeApplier(), 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
+	n1, err := NewNode("n1", addr1, peers, NewStorage(filepath.Join(baseDir, "n1.wal")), newFakeApplier(), 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
+	require.NoError(t, err)
+	n2, err := NewNode("n2", addr2, peers, NewStorage(filepath.Join(baseDir, "n2.wal")), newFakeApplier(), 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
+	require.NoError(t, err)
 	defer n1.Close()
 	defer n2.Close()
 
 	leader := waitForLeader(t, n1, n2)
 	start := time.Now()
-	_, err := leader.Submit(&command.SetCommand{Key: "k-timeout", Value: "v"})
+	_, err = leader.Submit(&command.SetCommand{Key: "k-timeout", Value: "v"})
 	duration := time.Since(start)
 
 	require.NoError(t, err)
@@ -270,10 +280,11 @@ func TestNodeCreatesSnapshotAndRecoversOnRestart(t *testing.T) {
 
 	applier := newFakeApplier()
 	walPath := filepath.Join(baseDir, "node.wal")
-	node := NewNode("node-1", addr, peers, NewStorage(walPath), applier, 80*time.Millisecond, 180*time.Millisecond, true, 2, logger)
+	node, err := NewNode("node-1", addr, peers, NewStorage(walPath), applier, 80*time.Millisecond, 180*time.Millisecond, true, 2, logger)
+	require.NoError(t, err)
 	leader := waitForLeader(t, node)
 
-	_, err := leader.Submit(&command.SetCommand{Key: "k1", Value: "v1"})
+	_, err = leader.Submit(&command.SetCommand{Key: "k1", Value: "v1"})
 	require.NoError(t, err)
 	_, err = leader.Submit(&command.SetCommand{Key: "k2", Value: "v2"})
 	require.NoError(t, err)
@@ -282,7 +293,8 @@ func TestNodeCreatesSnapshotAndRecoversOnRestart(t *testing.T) {
 	node.Close()
 
 	restarted := newFakeApplier()
-	node2 := NewNode("node-1", addr, peers, NewStorage(walPath), restarted, 80*time.Millisecond, 180*time.Millisecond, true, 2, logger)
+	node2, err := NewNode("node-1", addr, peers, NewStorage(walPath), restarted, 80*time.Millisecond, 180*time.Millisecond, true, 2, logger)
+	require.NoError(t, err)
 	defer node2.Close()
 	waitForCondition(t, func() bool { return restarted.Has("k1") && restarted.Has("k2") })
 }
@@ -294,7 +306,8 @@ func TestNodeInstallSnapshotRestoresFollowerState(t *testing.T) {
 	peers := []string{"http://" + addr}
 
 	applier := newFakeApplier()
-	node := NewNode("node-1", addr, peers, NewStorage(filepath.Join(baseDir, "node.wal")), applier, 80*time.Millisecond, 180*time.Millisecond, true, 2, logger)
+	node, err := NewNode("node-1", addr, peers, NewStorage(filepath.Join(baseDir, "node.wal")), applier, 80*time.Millisecond, 180*time.Millisecond, true, 2, logger)
+	require.NoError(t, err)
 	defer node.Close()
 
 	resp := node.onInstallSnapshot(InstallSnapshotReq{

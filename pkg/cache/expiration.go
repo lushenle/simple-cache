@@ -21,6 +21,16 @@ func (c *Cache) SetExpiration(key string, expire string) bool {
 		return false
 	}
 
+	// Parse/validate before mutating so invalid input is a no-op.
+	var duration time.Duration
+	if expire != "" {
+		var err error
+		duration, err = time.ParseDuration(expire)
+		if err != nil {
+			return false
+		}
+	}
+
 	// Remove old expiration from heap if present
 	if !item.expiration.IsZero() {
 		if idx, ok := c.expirationIndex[key]; ok {
@@ -34,11 +44,6 @@ func (c *Cache) SetExpiration(key string, expire string) bool {
 	if expire == "" {
 		item.expiration = time.Time{}
 		return true
-	}
-
-	duration, err := time.ParseDuration(expire)
-	if err != nil {
-		return false
 	}
 
 	item.expiration = time.Now().Add(duration)
