@@ -192,7 +192,7 @@ func (s *Storage) LoadMeta() (*Meta, error) {
 	var m Meta
 	dec := json.NewDecoder(f)
 	if err := dec.Decode(&m); err != nil {
-		return &Meta{}, nil
+		return nil, fmt.Errorf("corrupt raft meta file %s: %w", mp, err)
 	}
 	return &m, nil
 }

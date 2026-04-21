@@ -9,8 +9,10 @@ import (
 )
 
 // stopCh is used to gracefully stop the memory usage goroutine.
-var stopCh chan struct{}
-var initOnce sync.Once
+var (
+	stopCh   chan struct{}
+	initOnce sync.Once
+)
 
 type InstrumentedRWMutex struct {
 	mu sync.RWMutex
@@ -288,10 +290,15 @@ func ObserveAppendEntriesLatency(d time.Duration) { RaftAppendEntriesLatency.Obs
 func SetPeersTotal(n int)                         { PeersTotal.Set(float64(n)) }
 
 // Persistence metrics helpers
-func IncPersistenceOp(op, status string)            { PersistenceOpTotal.WithLabelValues(op, status).Inc() }
-func ObservePersistenceDuration(op string, d float64) { PersistenceDuration.WithLabelValues(op).Observe(d) }
-func SetDumpKeys(n int64)                           { DumpKeysGauge.Set(float64(n)) }
-func SetLoadKeys(loaded, skipped int64)             { LoadKeysGauge.WithLabelValues("loaded").Set(float64(loaded)); LoadKeysGauge.WithLabelValues("skipped").Set(float64(skipped)) }
+func IncPersistenceOp(op, status string) { PersistenceOpTotal.WithLabelValues(op, status).Inc() }
+func ObservePersistenceDuration(op string, d float64) {
+	PersistenceDuration.WithLabelValues(op).Observe(d)
+}
+func SetDumpKeys(n int64) { DumpKeysGauge.Set(float64(n)) }
+func SetLoadKeys(loaded, skipped int64) {
+	LoadKeysGauge.WithLabelValues("loaded").Set(float64(loaded))
+	LoadKeysGauge.WithLabelValues("skipped").Set(float64(skipped))
+}
 
 func (m *InstrumentedRWMutex) Lock(opType LockOp) {
 	start := time.Now()
