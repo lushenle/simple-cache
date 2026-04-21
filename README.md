@@ -140,7 +140,7 @@ graph TB
 | `server` | `pkg/server/` | gRPC 服务层：接收请求、命令分发、模式切换 |
 | `raft` | `pkg/raft/` | Raft 共识实现：Leader 选举、日志复制、多数派提交 |
 | `fsm` | `pkg/fsm/` | 有限状态机：将 Raft 日志应用到缓存 |
-| `command` | `pkg/command/` | 命令定义与编解码：Set/Del/ExpireKey/Reset/Search Command + Codec |
+| `command` | `pkg/command/` | 命令定义（含 Search）与编解码（Set/Del/ExpireKey/Reset） |
 | `config` | `pkg/config/` | 配置管理：YAML 加载、原子配置、热重载 |
 | `metrics` | `pkg/metrics/` | Prometheus 指标采集与暴露 |
 | `log` | `pkg/log/` | 日志系统：zap 结构化日志 + lumberjack 轮转 |
