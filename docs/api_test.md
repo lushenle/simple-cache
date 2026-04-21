@@ -89,14 +89,23 @@ curl -X DELETE http://localhost:8080/v1
 
 ### 搜索键
 
-前缀搜索：
+前缀搜索（路径参数方式）：
 ```bash
-curl -X GET "http://localhost:8080/v1/search?pattern=test_"
+curl -X GET "http://localhost:8080/v1/search/test_*"
 ```
 
-正则表达式搜索：
+正则表达式搜索（路径参数方式）：
 ```bash
-curl -X GET "http://localhost:8080/v1/search?pattern=regex:test.*&mode=REGEX"
+curl -X GET "http://localhost:8080/v1/search/test.*/regex"
+```
+
+也支持 query string 方式（proto 中 `get: "/v1/search"` 绑定）：
+```bash
+# 通配符搜索
+curl -X GET "http://localhost:8080/v1/search?pattern=test_*"
+
+# 正则搜索（mode=1 对应 REGEX 枚举值）
+curl -X GET "http://localhost:8080/v1/search?pattern=test.*&mode=1"
 ```
 
 ## 数据持久化

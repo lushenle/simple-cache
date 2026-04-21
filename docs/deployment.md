@@ -36,7 +36,7 @@
 ## 分布式模式
 - 配置 `peers` 列表或通过 HTTP Admin 动态加入：
   - `POST /cluster/join {"id":"n2","addr":"http://host:9090"}`
-  - `POST /cluster/leave {"id":"n2"}`
+  - `POST /cluster/leave {"addr":"http://host:9090"}`
 - 每个节点独立管理自己的 Dump 文件
 - distributed 模式禁用启动自动 `Load` 与手动 `Load`，恢复依赖 WAL replay
 - distributed 模式下启用 snapshot 后，恢复会优先加载 snapshot，再回放其后的增量 WAL

@@ -140,7 +140,7 @@ graph TB
 | `server` | `pkg/server/` | gRPC 服务层：接收请求、命令分发、模式切换 |
 | `raft` | `pkg/raft/` | Raft 共识实现：Leader 选举、日志复制、多数派提交 |
 | `fsm` | `pkg/fsm/` | 有限状态机：将 Raft 日志应用到缓存 |
-| `command` | `pkg/command/` | 命令定义：Set/Get/Del/Expire/Reset/Search |
+| `command` | `pkg/command/` | 命令定义与编解码：Set/Del/ExpireKey/Reset/Search Command + Codec |
 | `config` | `pkg/config/` | 配置管理：YAML 加载、原子配置、热重载 |
 | `metrics` | `pkg/metrics/` | Prometheus 指标采集与暴露 |
 | `log` | `pkg/log/` | 日志系统：zap 结构化日志 + lumberjack 轮转 |
@@ -822,11 +822,17 @@ CONFIG_PATH=configs/node1.yaml go run pkg/cmd/main.go
 ### 测试
 
 ```bash
-# 运行所有测试（带覆盖率）
+# 运行所有单元测试（带覆盖率）
 make test
 
 # 运行带 Race 检测的测试
-go test -race -v -count=1 -cover ./...
+make test-race
+
+# 运行 E2E 测试（需要 e2e 构建标签）
+make test-e2e
+
+# 运行 CI 全套检查（vet + test + test-race）
+make ci
 
 # 运行基准测试
 go test -bench=. -benchmem ./pkg/cache/
