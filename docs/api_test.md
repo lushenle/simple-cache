@@ -96,8 +96,10 @@ curl -X GET "http://localhost:8080/v1/search/test_*"
 
 正则表达式搜索（路径参数方式）：
 ```bash
-curl -X GET "http://localhost:8080/v1/search/test.*/regex"
+curl -X GET "http://localhost:8080/v1/search/test.*/REGEX"
 ```
+
+> **注意**：路径参数中的 `mode` 值由网关按 proto enum 名称解析，必须使用大写枚举名（如 `REGEX`）或对应数字（如 `1`），小写值（如 `regex`）将导致 `InvalidArgument` 错误。
 
 也支持 query string 方式（proto 中 `get: "/v1/search"` 绑定）：
 ```bash
