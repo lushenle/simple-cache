@@ -37,7 +37,7 @@ sequenceDiagram
 
 ## 日志追平（InstallSnapshot）
 - 当 follower 严重落后，所需日志已被 Leader 端 compaction 删除时，Leader 通过 `InstallSnapshot` RPC 发送完整 snapshot
-- follower 收到后调用 `FSM.RestoreSnapshot()` 恢复状态，然后继续正常的 AppendEntries 增量复制
+- follower 收到后调用 `SnapshotProvider.RestoreSnapshot(nodeID, data)` 恢复状态，然后继续正常的 AppendEntries 增量复制
 - HTTP 端点：`POST /raft/install_snapshot`
 
 ## 成员管理
