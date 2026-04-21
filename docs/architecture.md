@@ -98,9 +98,9 @@ sequenceDiagram
 ```
 
 ## 模块边界
-- 接口层：`pkg/pb` (Protobuf)、`pkg/server` (gRPC/HTTP)
-- 领域层：`pkg/fsm`、`pkg/command`
-- 共识层：`pkg/raft` (Raft 选举、日志复制、snapshot/compaction、InstallSnapshot)
+- 接口层：`pkg/pb` (Protobuf)、`pkg/server` (gRPC/HTTP，含 `auth.go` 认证中间件)
+- 领域层：`pkg/fsm`、`pkg/command` (含 `codec.go` 命令序列化/反序列化)
+- 共识层：`pkg/raft` (Raft 选举、日志复制、snapshot/compaction、InstallSnapshot，含 `peer.go` 地址规范化)
 - 缓存引擎：`pkg/cache` (CRUD、TTL 过期、前缀/正则搜索、single 模式 Dump/Load 持久化)
 - 基础设施层：`pkg/config` (配置管理)、`pkg/log` (日志)、`pkg/metrics` (指标)、`pkg/utils` (工具)
 - 客户端：`pkg/client` (gRPC 客户端 SDK)

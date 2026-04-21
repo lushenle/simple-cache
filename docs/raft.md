@@ -35,6 +35,11 @@ sequenceDiagram
 - Leader 直接读取
 - Follower 返回 `FailedPrecondition` 错误（当前实现不做自动转发）
 
+## 日志追平（InstallSnapshot）
+- 当 follower 严重落后，所需日志已被 Leader 端 compaction 删除时，Leader 通过 `InstallSnapshot` RPC 发送完整 snapshot
+- follower 收到后调用 `SnapshotProvider.RestoreSnapshot(nodeID, data)` 恢复状态，然后继续正常的 AppendEntries 增量复制
+- HTTP 端点：`POST /raft/install_snapshot`
+
 ## 成员管理
 - HTTP Admin：`/cluster/join`、`/cluster/leave`、`/cluster/peers`
 - 成员变更通过 Raft 日志提交后再生效，并持久化到本地 meta

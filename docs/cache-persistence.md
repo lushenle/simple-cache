@@ -186,7 +186,7 @@ SIGINT/SIGTERM
     ├─ 2. cancel() → HTTP Gateway 停止
     ├─ 3. waitGroup.Wait()
     ├─ 4. raftNode.Close()（如果有）
-    ├─ 4.5 ★ c.DumpToDefault() ★  ← 新增：自动 Dump
+    ├─ 4.5 ★ c.Dump(nodeID, format, defaultPath) ★  ← 自动 Dump
     ├─ 5. c.Close()
     ├─ 6. close(stop) → Config Watcher 停止
     └─ 7. metricsServer.Shutdown()
@@ -214,7 +214,7 @@ main()
     ├─ log.NewLogger()
     ├─ config.Load()
     ├─ cache.New()
-    ├─ ★ c.LoadFromDefault() ★  ← 新增：自动 Load
+    ├─ ★ c.Load(nodeID, defaultPath) ★  ← 自动 Load（仅 single 模式）
     ├─ server.New(c, nodeID)
     ├─ [分布式模式] raft.NewNode()
     └─ 启动 gRPC + HTTP Server
