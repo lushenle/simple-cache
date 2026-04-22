@@ -197,6 +197,10 @@ func (s *CacheService) Reset(ctx context.Context, req *pb.ResetRequest) (*pb.Res
 }
 
 func (s *CacheService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.SearchResponse, error) {
+	if s.node != nil && s.node.Role() != raft.Leader {
+		return nil, status.Error(codes.FailedPrecondition, "not leader")
+	}
+
 	pattern := req.Pattern
 	useRegex := strings.HasPrefix(pattern, "regex:")
 

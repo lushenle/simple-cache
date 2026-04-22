@@ -2,6 +2,7 @@ package cache
 
 import (
 	"container/heap"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -18,8 +19,9 @@ import (
 )
 
 const (
-	dumpMagic   = "SCDF"
-	dumpVersion = 1
+	dumpMagic     = "SCDF"
+	dumpVersion   = 2
+	dumpVersionV1 = 1
 )
 
 // DumpEntry represents a single cache entry in the dump file.
@@ -85,7 +87,6 @@ func (c *Cache) Dump(nodeID, format, path string) (*DumpResult, error) {
 	}
 
 	data, entries, expiredCount, err := c.dumpToBytes(nodeID, format)
-
 	if err != nil {
 		metrics.IncPersistenceOp("dump", "error")
 		return nil, fmt.Errorf("serialize dump data: %w", err)
@@ -93,13 +94,13 @@ func (c *Cache) Dump(nodeID, format, path string) (*DumpResult, error) {
 
 	// Atomic and durable write: write+fsync temp file, rename, then fsync directory
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		metrics.IncPersistenceOp("dump", "error")
 		return nil, fmt.Errorf("create directory %s: %w", dir, err)
 	}
 
 	tmpPath := path + ".tmp"
-	tmpFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	tmpFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		metrics.IncPersistenceOp("dump", "error")
 		return nil, fmt.Errorf("create temp file: %w", err)
@@ -400,6 +401,11 @@ func encodeBinaryDump(entries []DumpEntry) ([]byte, error) {
 		} else {
 			buf = append(buf, 0)
 		}
+
+		// ValueType (v2+)
+		vtBytes := []byte(e.ValueType)
+		buf = binary.BigEndian.AppendUint32(buf, uint32(len(vtBytes)))
+		buf = append(buf, vtBytes...)
 	}
 
 	// Footer: CRC32
@@ -421,7 +427,7 @@ func decodeBinaryDump(data []byte) ([]DumpEntry, error) {
 	}
 
 	version := binary.BigEndian.Uint32(data[4:8])
-	if version != dumpVersion {
+	if version != dumpVersion && version != dumpVersionV1 {
 		return nil, fmt.Errorf("unsupported version: %d", version)
 	}
 
@@ -490,10 +496,25 @@ func decodeBinaryDump(data []byte) ([]DumpEntry, error) {
 		}
 		offset += 1
 
+		valueType := "string" // default for v1
+		if version >= dumpVersion {
+			// ValueType (v2+)
+			if offset+4 > footerStart {
+				return nil, fmt.Errorf("truncated dump at entry %d value type length", i)
+			}
+			vtLen := binary.BigEndian.Uint32(data[offset : offset+4])
+			offset += 4
+			if offset+int(vtLen) > footerStart {
+				return nil, fmt.Errorf("truncated dump at entry %d value type data", i)
+			}
+			valueType = string(data[offset : offset+int(vtLen)])
+			offset += int(vtLen)
+		}
+
 		entry := DumpEntry{
 			Key:           key,
 			Value:         value,
-			ValueType:     "string", // binary format doesn't preserve type info
+			ValueType:     valueType,
 			HasExpiration: hasExp,
 		}
 		if hasExp && expUnix != 0 {
@@ -522,7 +543,7 @@ func serializeValue(v any) (string, string) {
 	case string:
 		return val, "string"
 	case []byte:
-		return string(val), "bytes" // Note: lossy for non-UTF-8 bytes
+		return base64.StdEncoding.EncodeToString(val), "bytes"
 	default:
 		// Try JSON marshal for complex types
 		b, err := json.Marshal(val)
@@ -535,10 +556,20 @@ func serializeValue(v any) (string, string) {
 
 func deserializeValue(data, valueType string) any {
 	switch valueType {
+	case "nil":
+		return nil
 	case "bytes":
-		return []byte(data)
-	case "json", "other":
-		return data // Return as string
+		decoded, err := base64.StdEncoding.DecodeString(data)
+		if err != nil {
+			return []byte(data)
+		}
+		return decoded
+	case "json":
+		var v any
+		if err := json.Unmarshal([]byte(data), &v); err != nil {
+			return data
+		}
+		return v
 	default:
 		return data
 	}

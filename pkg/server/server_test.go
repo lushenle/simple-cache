@@ -118,3 +118,36 @@ func TestGRPCServer(t *testing.T) {
 		assert.Equal(t, common.ProbeStateNotReady, ready.Status)
 	})
 }
+
+func TestSearchRejectsNonLeader(t *testing.T) {
+	plugin := log.NewStdoutPlugin(zapcore.DebugLevel)
+	logger := log.NewLogger(plugin)
+
+	c := cache.New(time.Second*3, logger)
+	srv := New(c, "test-node")
+
+	transportAddr := "127.0.0.1:0"
+	node, err := raft.NewNode(
+		"test-node-search",
+		transportAddr,
+		[]string{"http://" + transportAddr, "http://127.0.0.1:19999"},
+		raft.NewStorage(filepath.Join(t.TempDir(), "raft-search.wal")),
+		srv,
+		50*time.Millisecond,
+		500*time.Millisecond,
+		true,
+		8,
+		logger,
+	)
+	require.NoError(t, err)
+	defer node.Close()
+	srv.UseRaft(node)
+
+	_, err = srv.Search(context.Background(), &pb.SearchRequest{
+		Pattern: "test:*",
+	})
+	assert.Error(t, err)
+	st, ok := status.FromError(err)
+	assert.True(t, ok)
+	assert.Equal(t, codes.FailedPrecondition, st.Code())
+}

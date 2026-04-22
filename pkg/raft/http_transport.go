@@ -57,8 +57,15 @@ func (t *HTTPTransport) Start(node *Node) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/raft/append", func(w http.ResponseWriter, r *http.Request) {
 		var req AppendEntriesReq
-		b, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(b, &req)
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body failed", http.StatusBadRequest)
+			return
+		}
+		if err := json.Unmarshal(b, &req); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
 		if node.logger != nil {
 			node.logger.Debug("http recv append", zap.String("node", node.id), zap.String("leader", req.LeaderID), zap.Uint64("term", req.Term))
 		}
@@ -69,8 +76,15 @@ func (t *HTTPTransport) Start(node *Node) {
 	})
 	mux.HandleFunc("/raft/vote", func(w http.ResponseWriter, r *http.Request) {
 		var req RequestVoteReq
-		b, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(b, &req)
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body failed", http.StatusBadRequest)
+			return
+		}
+		if err := json.Unmarshal(b, &req); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
 		if node.logger != nil {
 			node.logger.Debug("http recv vote", zap.String("node", node.id), zap.String("candidate", req.CandidateID), zap.Uint64("term", req.Term))
 		}
@@ -81,8 +95,15 @@ func (t *HTTPTransport) Start(node *Node) {
 	})
 	mux.HandleFunc("/raft/install_snapshot", func(w http.ResponseWriter, r *http.Request) {
 		var req InstallSnapshotReq
-		b, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(b, &req)
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body failed", http.StatusBadRequest)
+			return
+		}
+		if err := json.Unmarshal(b, &req); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
 		if node.logger != nil {
 			node.logger.Debug("http recv install snapshot", zap.String("node", node.id), zap.String("leader", req.LeaderID), zap.Uint64("term", req.Term), zap.Uint64("index", req.LastIncludedIndex))
 		}

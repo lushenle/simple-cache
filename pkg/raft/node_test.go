@@ -331,3 +331,87 @@ func contains(items []string, target string) bool {
 	}
 	return false
 }
+
+func TestRequestVoteLogComparison(t *testing.T) {
+	logger := zap.NewNop()
+	baseDir := t.TempDir()
+	addr := freeAddr(t)
+	peers := []string{"http://" + addr}
+
+	applier := newFakeApplier()
+	node, err := NewNode("node-1", addr, peers, NewStorage(filepath.Join(baseDir, "node.wal")), applier, 80*time.Millisecond, 180*time.Millisecond, true, 8, logger)
+	require.NoError(t, err)
+	defer node.Close()
+
+	waitForLeader(t, node)
+
+	// Submit a few entries so the node has some log state.
+	_, err = node.Submit(&command.SetCommand{Key: "a", Value: "1"})
+	require.NoError(t, err)
+	_, err = node.Submit(&command.SetCommand{Key: "b", Value: "2"})
+	require.NoError(t, err)
+	waitForCondition(t, func() bool { return applier.Has("a") && applier.Has("b") })
+
+	cases := []struct {
+		name        string
+		buildReq    func() RequestVoteReq
+		wantGranted bool
+	}{
+		{
+			name: "candidate with higher term but shorter log",
+			buildReq: func() RequestVoteReq {
+				return RequestVoteReq{
+					Term:         node.term + 1,
+					CandidateID:  "candidate-1",
+					LastLogTerm:  node.lastLogTerm + 1,
+					LastLogIndex: node.lastLogIndex - 1,
+				}
+			},
+			wantGranted: true,
+		},
+		{
+			name: "candidate with lower term",
+			buildReq: func() RequestVoteReq {
+				return RequestVoteReq{
+					Term:         node.term + 1,
+					CandidateID:  "candidate-2",
+					LastLogTerm:  node.lastLogTerm - 1,
+					LastLogIndex: node.lastLogIndex + 10,
+				}
+			},
+			wantGranted: false,
+		},
+		{
+			name: "candidate with same term but shorter log",
+			buildReq: func() RequestVoteReq {
+				return RequestVoteReq{
+					Term:         node.term + 1,
+					CandidateID:  "candidate-3",
+					LastLogTerm:  node.lastLogTerm,
+					LastLogIndex: node.lastLogIndex - 1,
+				}
+			},
+			wantGranted: false,
+		},
+		{
+			name: "candidate with same term and longer log",
+			buildReq: func() RequestVoteReq {
+				return RequestVoteReq{
+					Term:         node.term + 1,
+					CandidateID:  "candidate-4",
+					LastLogTerm:  node.lastLogTerm,
+					LastLogIndex: node.lastLogIndex + 1,
+				}
+			},
+			wantGranted: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := tc.buildReq()
+			resp := node.onRequestVote(req)
+			require.Equal(t, tc.wantGranted, resp.VoteGranted)
+		})
+	}
+}

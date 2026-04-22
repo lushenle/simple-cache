@@ -536,10 +536,11 @@ func (n *Node) onRequestVote(req RequestVoteReq) RequestVoteResp {
 	if req.Term > n.term {
 		n.stepDownLocked(req.Term)
 	}
-	if req.LastLogIndex < n.lastLogIndex {
+	// Raft §5.4.1: compare last log term first, then index
+	if req.LastLogTerm < n.lastLogTerm {
 		return RequestVoteResp{Term: n.term, VoteGranted: false}
 	}
-	if req.LastLogIndex == n.lastLogIndex && req.LastLogTerm < n.lastLogTerm {
+	if req.LastLogTerm == n.lastLogTerm && req.LastLogIndex < n.lastLogIndex {
 		return RequestVoteResp{Term: n.term, VoteGranted: false}
 	}
 	if n.votedFor == "" || n.votedFor == req.CandidateID {
