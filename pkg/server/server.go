@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"strings"
 
 	"github.com/lushenle/simple-cache/pkg/cache"
 	"github.com/lushenle/simple-cache/pkg/command"
@@ -201,15 +200,8 @@ func (s *CacheService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.S
 		return nil, status.Error(codes.FailedPrecondition, "not leader")
 	}
 
-	pattern := req.Pattern
-	useRegex := strings.HasPrefix(pattern, "regex:")
-
-	if useRegex {
-		pattern = strings.TrimPrefix(pattern, "regex:")
-	}
-
 	cmd := &command.SearchCommand{
-		Pattern:  pattern,
+		Pattern:  req.Pattern,
 		UseRegex: req.Mode == pb.SearchRequest_REGEX,
 	}
 

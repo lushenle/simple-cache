@@ -279,7 +279,10 @@ func UpdateExpirationHeapSize(n int) {
 
 // Raft helpers
 func SetRaftRole(nodeID, role string) {
-	// Set 1 for current role; other role series are not touched here
+	// Clear all roles for this node, then set only the current one
+	for _, r := range []string{"follower", "candidate", "leader"} {
+		RaftRole.WithLabelValues(nodeID, r).Set(0)
+	}
 	RaftRole.WithLabelValues(nodeID, role).Set(1)
 }
 
