@@ -38,11 +38,11 @@ func (c *Cache) searchPrefix(prefix string) []string {
 	c.prefixTree.WalkPrefix(prefix, func(s string, v interface{}) bool {
 		if item, exists := c.items[s]; exists {
 			if !item.expiration.IsZero() && time.Now().After(item.expiration) {
-				return true
+				return false
 			}
 			result = append(result, s)
 		}
-		return true
+		return false
 	})
 
 	return result
@@ -71,7 +71,7 @@ func (c *Cache) searchGeneric(pattern string, useRegex bool) ([]string, error) {
 		// Check if key has an expiration and is already expired
 		if item, exists := c.items[s]; exists {
 			if !item.expiration.IsZero() && time.Now().After(item.expiration) {
-				return true
+				return false
 			}
 
 			// Pattern matching
@@ -86,7 +86,7 @@ func (c *Cache) searchGeneric(pattern string, useRegex bool) ([]string, error) {
 				matches = append(matches, s)
 			}
 		}
-		return true
+		return false
 	})
 
 	return matches, nil
