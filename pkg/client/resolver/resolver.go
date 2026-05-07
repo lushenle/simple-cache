@@ -6,7 +6,7 @@
 //	import "github.com/lushenle/simple-cache/pkg/client/resolver"
 //
 //	conn, err := grpc.NewClient("simplecache:///node1:5051,node2:5051",
-//	    grpc.WithResolvers(&resolver.Builder{}),
+//	    grpc.WithResolvers(&gresolver.Builder{}),
 //	    grpc.WithTransportCredentials(insecure.NewCredentials()),
 //	)
 //
@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/grpc/resolver"
+	gresolver "google.golang.org/grpc/resolver"
 )
 
 // Scheme is the URI scheme this resolver handles.
@@ -36,7 +36,7 @@ type probeResponse struct {
 	Role           string `json:"role"`
 }
 
-// Builder implements resolver.Builder for the "simplecache" scheme.
+// Builder implements gresolver.Builder for the "simplecache" scheme.
 type Builder struct {
 	// HTTPClient is used for health probes.  If nil, http.DefaultClient is used.
 	HTTPClient *http.Client
@@ -47,12 +47,12 @@ type Builder struct {
 }
 
 // Build creates a new resolver for the given target.
-func (b *Builder) Build(target resolver.Target, cc resolver.ClientConn, opts resolver.BuildOptions) (resolver.Resolver, error) {
+func (b *Builder) Build(target gresolver.Target, cc gresolver.ClientConn, opts gresolver.BuildOptions) (gresolver.Resolver, error) {
 	// Parse peer addresses from the target URL endpoint.
 	// The endpoint format is "host1:port1,host2:port2,..."
 	peers := parseTarget(target)
 	if len(peers) == 0 {
-		return nil, resolver.ErrMissingEndpoints
+		return nil, gresolver.ErrMissingEndpoints
 	}
 
 	interval := b.ProbeInterval
@@ -84,18 +84,18 @@ func (b *Builder) Build(target resolver.Target, cc resolver.ClientConn, opts res
 // Scheme returns the URI scheme.
 func (b *Builder) Scheme() string { return Scheme }
 
-// simpleCacheResolver implements resolver.Resolver.
+// simpleCacheResolver implements gresolver.Resolver.
 type simpleCacheResolver struct {
 	mu       sync.Mutex
 	peers    []string        // gRPC addresses of all known cluster nodes
-	cc       resolver.ClientConn
+	cc       gresolver.ClientConn
 	client   *http.Client
 	interval time.Duration
 	stopCh   chan struct{}
 }
 
 // ResolveNow is a no-op; periodic discovery is handled by the background loop.
-func (r *simpleCacheResolver) ResolveNow(o resolver.ResolveNowOptions) {}
+func (r *simpleCacheResolver) ResolveNow(o gresolver.ResolveNowOptions) {}
 
 // Close stops the background discovery loop.
 func (r *simpleCacheResolver) Close() {
@@ -124,18 +124,18 @@ func (r *simpleCacheResolver) discoverAndUpdate() {
 	defer r.mu.Unlock()
 
 	if leaderAddr != "" {
-		r.cc.UpdateState(resolver.State{
-			Addresses: []resolver.Address{{Addr: leaderAddr}},
+		r.cc.UpdateState(gresolver.State{
+			Addresses: []gresolver.Address{{Addr: leaderAddr}},
 		})
 		return
 	}
 
 	// Fallback: supply all peers so gRPC can try each.
-	addrs := make([]resolver.Address, len(r.peers))
+	addrs := make([]gresolver.Address, len(r.peers))
 	for i, p := range r.peers {
-		addrs[i] = resolver.Address{Addr: p}
+		addrs[i] = gresolver.Address{Addr: p}
 	}
-	r.cc.UpdateState(resolver.State{Addresses: addrs})
+	r.cc.UpdateState(gresolver.State{Addresses: addrs})
 }
 
 // discoverLeader probes each peer's /healthz looking for the Raft leader.
@@ -218,7 +218,7 @@ func makeHealthURL(grpcAddr string) string {
 //
 //	simplecache:///host1:port1,host2:port2
 //	simplecache:///host1:port1
-func parseTarget(target resolver.Target) []string {
+func parseTarget(target gresolver.Target) []string {
 	endpoint := target.URL.Host
 	if endpoint == "" {
 		endpoint = target.Endpoint()

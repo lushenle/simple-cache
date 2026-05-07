@@ -219,27 +219,28 @@ func (c *Client) Close() error {
 // discoverLeader tries each node in order until it finds one that is either
 // the Leader or (failing that) any reachable node.
 func (c *Client) discoverLeader(ctx context.Context) error {
+	var lastErr error
+
 	// Phase 2 fast path: query each node's /healthz to find who the leader is.
-	for i, node := range c.nodes {
+	for _, node := range c.nodes {
 		if node.GRPCAddr == "" {
 			continue
 		}
 		leaderAddr := c.probeLeaderGRPCAddr(ctx, node)
 		if leaderAddr != "" {
 			if err := c.connectTo(ctx, leaderAddr); err != nil {
+				lastErr = err
 				continue
 			}
 			return nil
 		}
-		// If the node itself is the leader, connect.
 		if c.hasRole(ctx, node, "leader") {
 			if err := c.connectTo(ctx, node.GRPCAddr); err != nil {
+				lastErr = err
 				continue
 			}
 			return nil
 		}
-		// If this is a follower that returned a leader_grpc_addr, use it.
-		_ = i // fallback handled below
 	}
 
 	// Phase 1 fallback: connect to the first reachable node.
@@ -247,9 +248,15 @@ func (c *Client) discoverLeader(ctx context.Context) error {
 		if node.GRPCAddr == "" {
 			continue
 		}
-		if err := c.connectTo(ctx, node.GRPCAddr); err == nil {
+		err := c.connectTo(ctx, node.GRPCAddr)
+		if err == nil {
 			return nil
 		}
+		lastErr = err
+	}
+
+	if lastErr != nil {
+		return fmt.Errorf("no reachable cluster node (tried %d nodes): %w", len(c.nodes), lastErr)
 	}
 	return fmt.Errorf("no reachable cluster node (tried %d nodes)", len(c.nodes))
 }
