@@ -147,8 +147,6 @@ func main() {
 	}
 	grpcServer := grpc.NewServer(grpcOptions...)
 	pb.RegisterCacheServiceServer(grpcServer, srv)
-	// Phase 2: register cluster-info service for leader discovery.
-	grpcServer.RegisterService(&server.SimpleCacheInfoServiceDesc, server.NewClusterInfoHandler(srv))
 
 	// Graceful shutdown on SIGINT/SIGTERM
 	sigCh := make(chan os.Signal, 1)

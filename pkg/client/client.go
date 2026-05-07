@@ -119,7 +119,17 @@ func WithGRPCDialOptions(opts ...grpc.DialOption) ClientOption {
 
 // New creates a single-node client (backwards compatible).
 func New(ctx context.Context, addr string, opts ...grpc.DialOption) (*Client, error) {
-	return NewCluster(ctx, []NodeSpec{{GRPCAddr: addr}}, WithGRPCDialOptions(opts...))
+	// Preserve the original behavior: when no custom dial opts are given,
+	// use the defaults (including insecure transport credentials).
+	// When opts ARE given, they replace the defaults entirely (the caller
+	// takes full control of the dial config).
+	return NewCluster(ctx, []NodeSpec{{GRPCAddr: addr}},
+		func(o *clientOpts) {
+			if len(opts) > 0 {
+				o.dialOpts = opts
+			}
+		},
+	)
 }
 
 // NewDefault creates a single-node client with default options.
@@ -234,13 +244,6 @@ func (c *Client) discoverLeader(ctx context.Context) error {
 			}
 			return nil
 		}
-		if c.hasRole(ctx, node, "leader") {
-			if err := c.connectTo(ctx, node.GRPCAddr); err != nil {
-				lastErr = err
-				continue
-			}
-			return nil
-		}
 	}
 
 	// Phase 1 fallback: connect to the first reachable node.
@@ -272,13 +275,6 @@ func (c *Client) rebalance(ctx context.Context) error {
 		}
 		leaderAddr := c.probeLeaderGRPCAddr(ctx, node)
 		if leaderAddr != "" {
-			c.mu.Lock()
-			idx, ok := c.nodeMap[leaderAddr]
-			c.mu.Unlock()
-			if ok {
-				return c.switchTo(ctx, idx)
-			}
-			// Leader addr not in our node list, connect directly.
 			return c.connectTo(ctx, leaderAddr)
 		}
 	}
@@ -303,18 +299,13 @@ func (c *Client) rebalance(ctx context.Context) error {
 }
 
 // probeLeaderGRPCAddr calls /healthz on the node's HTTP server and returns
-// the leader's gRPC address (Phase 2).  Returns "" on any error or if unknown.
+// the leader's gRPC address (Phase 2).  If the probed node itself is the
+// leader, returns its own gRPC address.  Returns "" on any error or unknown.
 func (c *Client) probeLeaderGRPCAddr(ctx context.Context, node NodeSpec) string {
-	// We need the HTTP address.  If we only have the gRPC address we skip
-	// the HTTP probe and fall through to the gRPC-level discovery.
 	if node.RaftAddr == "" {
 		return ""
 	}
-	// Map the Raft HTTP addr to an HTTP health endpoint.
-	base := strings.TrimSuffix(node.RaftAddr, "/")
-	base = strings.Replace(base, "http://", "http://", 1)
-	url := base + "/healthz"
-
+	url := strings.TrimSuffix(node.RaftAddr, "/") + "/healthz"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return ""
@@ -324,7 +315,6 @@ func (c *Client) probeLeaderGRPCAddr(ctx context.Context, node NodeSpec) string 
 		return ""
 	}
 	defer resp.Body.Close()
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return ""
@@ -347,34 +337,11 @@ func (c *Client) probeLeaderGRPCAddr(ctx context.Context, node NodeSpec) string 
 			return c.nodes[idx].GRPCAddr
 		}
 	}
+	// The probed node itself is the leader.
+	if probe.Role == "leader" {
+		return node.GRPCAddr
+	}
 	return ""
-}
-
-// hasRole checks whether a given node claims the given role in its /healthz.
-func (c *Client) hasRole(ctx context.Context, node NodeSpec, role string) bool {
-	if node.RaftAddr == "" {
-		return false
-	}
-	base := strings.TrimSuffix(node.RaftAddr, "/")
-	url := base + "/healthz"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return false
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return false
-	}
-	var probe healthProbe
-	if err := json.Unmarshal(body, &probe); err != nil {
-		return false
-	}
-	return probe.Role == role
 }
 
 // ---------------------------------------------------------------------------

@@ -10,7 +10,6 @@ import (
 	"github.com/lushenle/simple-cache/pkg/pb"
 	"github.com/lushenle/simple-cache/pkg/raft"
 	"github.com/lushenle/simple-cache/pkg/utils"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -332,54 +331,3 @@ func (s *CacheService) NodeID() string {
 	return s.nodeID
 }
 
-// ---------------------------------------------------------------------------
-// SimpleCacheInfo service descriptor – provides GetLeader as a programmatic
-// gRPC endpoint without protobuf regeneration (Phase 2).
-// ---------------------------------------------------------------------------
-
-// simpleCacheInfoServer is the server-side handler for the info service.
-type simpleCacheInfoServer struct {
-	svr *CacheService
-}
-
-// GetLeader returns the current leader's information.
-func (s *simpleCacheInfoServer) GetLeader(ctx context.Context, req *GetLeaderRequest) (*GetLeaderResponse, error) {
-	return s.svr.GetLeader(ctx)
-}
-
-// GetLeaderRequest is the (empty) request for GetLeader.
-type GetLeaderRequest struct{}
-
-// SimpleCacheInfoServiceDesc is a programmatically-registered gRPC service
-// that exposes cluster metadata (primarily GetLeader).
-//
-// Usage in main.go:
-//
-//	grpcServer.RegisterService(&server.SimpleCacheInfoServiceDesc, infoHandler)
-var SimpleCacheInfoServiceDesc = grpc.ServiceDesc{
-	ServiceName: "simplecache.ClusterInfo",
-	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "GetLeader",
-			Handler: func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-				if interceptor == nil {
-					return srv.(*simpleCacheInfoServer).GetLeader(ctx, nil)
-				}
-				info := &GetLeaderRequest{}
-				return interceptor(ctx, info, &grpc.UnaryServerInfo{
-					Server:     srv,
-					FullMethod: "/simplecache.ClusterInfo/GetLeader",
-				}, func(ctx context.Context, req interface{}) (interface{}, error) {
-					return srv.(*simpleCacheInfoServer).GetLeader(ctx, req.(*GetLeaderRequest))
-				})
-			},
-		},
-	},
-	Streams:  nil,
-	Metadata: "cluster_info",
-}
-
-// NewClusterInfoHandler creates the handler for the SimpleCacheInfo service.
-func NewClusterInfoHandler(svr *CacheService) interface{} {
-	return &simpleCacheInfoServer{svr: svr}
-}
