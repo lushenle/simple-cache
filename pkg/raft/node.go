@@ -150,7 +150,9 @@ func NewNode(id string, addr string, peers []string, storage *Storage, applier A
 	seed := time.Now().UnixNano() ^ int64(len(peers))
 	n.rnd = rand.New(rand.NewSource(seed))
 	n.resetElectionDeadline()
+	n.mu.Lock()
 	n.resetLeaderProgressLocked()
+	n.mu.Unlock()
 	_ = n.applyCommittedEntries()
 
 	n.wg.Add(2)
@@ -320,9 +322,10 @@ func (n *Node) Submit(cmd interface{}) (interface{}, error) {
 		metrics.SetRaftCommitIndex(n.commitIdx)
 		_ = n.storage.SaveMeta(n.metaLocked())
 	}
+	isSingle := n.majorityLocked() == 1
 	n.mu.Unlock()
 
-	if n.majorityLocked() == 1 {
+	if isSingle {
 		if err := n.applyCommittedEntries(); err != nil {
 			return nil, err
 		}
@@ -1049,6 +1052,12 @@ func (n *Node) stepDownLocked(term uint64) {
 	n.role.Store(Follower)
 	n.leaderID.Store("")
 	metrics.SetRaftRole(n.id, string(Follower))
+	// Notify and clean up any pending command waiters so they don't leak
+	for idx, w := range n.applyWaiter {
+		w <- applyResult{resp: nil, err: ErrNotLeader{Leader: ""}}
+		close(w)
+		delete(n.applyWaiter, idx)
+	}
 }
 
 type ErrNotLeader struct{ Leader string }
