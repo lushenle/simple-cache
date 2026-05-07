@@ -74,6 +74,8 @@
 - **优雅关闭** — 完整的 8 步优雅关闭流程（gRPC → Gateway → Raft → Dump → Cache → Config → Metrics → Logger）
 - **数据持久化** — 支持将缓存数据 Dump 到本地磁盘（二进制/JSON 双格式）；single 模式支持自动/手动 Load 恢复，distributed 模式依赖 WAL replay
 - **客户端 SDK** — 封装完整的 gRPC 客户端，提供友好的 Go API（包括批量操作）
+- **自动 Leader 切主** — Cluster 模式 client 自动发现 Leader，遇到 `not leader` 错误自动重试并切主
+- **gRPC Name Resolver** — 内置 `simplecache://` URI scheme resolver，与 gRPC 框架原生集成
 
 ---
 
@@ -431,7 +433,8 @@ simple-cache/
 │   │   ├── metrics.go           #   缓存大小估算
 │   │   └── *_test.go            #   单元测试 + 基准测试
 │   ├── client/                  # 📦 gRPC 客户端 SDK
-│   │   └── client.go            #   Get/Set/Del/Search/BatchSet/ExpireKey/Reset
+│   │   ├── client.go            #   Get/Set/Del/Search/BatchSet/ExpireKey/Reset
+│   └── resolver/            #   自定义 gRPC Name Resolver (simplecache://)
 │   ├── cmd/                     # 📦 主程序入口
 │   │   ├── main.go              #   启动流程 + 优雅关闭 + HTTP 端点
 │   │   └── swagger/             #   内嵌 Swagger UI 静态文件
@@ -663,13 +666,46 @@ existed, err := cli.ExpireKey(ctx, "greeting", 5*time.Second)
 existed, err := cli.ExpireKey(ctx, "greeting", 0)
 ```
 
+### 集群模式（自动切主）
+
+```go
+// 使用 NewCluster 创建自动切主客户端
+cli, err := client.NewCluster(ctx, []client.NodeSpec{
+    {ID: "n1", GRPCAddr: ":5051", RaftAddr: "http://:9090"},
+    {ID: "n2", GRPCAddr: ":5052", RaftAddr: "http://:9091"},
+    {ID: "n3", GRPCAddr: ":5053", RaftAddr: "http://:9092"},
+}, client.WithCheckInterval(10*time.Second))
+if err != nil {
+    panic(err)
+}
+defer cli.Close()
+
+// 自动重试与切主：写操作
+err = cli.Set(ctx, "key", "value", 0)  // 连接到 Leader，失败时自动切到新 Leader
+
+// 自动重试与切主：读操作
+val, found, err := cli.Get(ctx, "key")
+```
+
+### 使用 gRPC Name Resolver（Phase 3）
+
+```go
+import "github.com/lushenle/simple-cache/pkg/client/resolver"
+
+conn, err := grpc.NewClient("simplecache:///:5051,:5052,:5053",
+    grpc.WithResolvers(&resolver.Builder{}),
+    grpc.WithTransportCredentials(insecure.NewCredentials()),
+)
+```
+
 ### 完整方法列表
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `New` | `New(ctx, addr, ...opts) (*Client, error)` | 创建客户端（带连接就绪检查） |
-| `NewDefault` | `NewDefault(addr, ...opts) (*Client, error)` | 使用 `context.Background()` 创建 |
+| `New` | `New(ctx, addr, ...opts) (*Client, error)` | 创建单节点客户端（向后兼容） |
+| `NewDefault` | `NewDefault(addr, ...opts) (*Client, error)` | 使用 `context.Background()` 创建单节点客户端 |
 | `NewSecure` | `NewSecure(ctx, addr, certFile, ...opts) (*Client, error)` | 使用 TLS 证书创建安全连接 |
+| `NewCluster` | `NewCluster(ctx, nodes, ...opts) (*Client, error)` | 创建集群客户端（自动 Leader 发现/切主/重试） |
 | `Close` | `Close() error` | 关闭连接 |
 | `Get` | `Get(ctx, key) (value, found, error)` | 获取值 |
 | `Set` | `Set(ctx, key, value, ttl) error` | 设置值 |
@@ -694,6 +730,7 @@ existed, err := cli.ExpireKey(ctx, "greeting", 0)
 | `raft_http_addr` | string | `:9090` | Raft 节点间通信地址 |
 | `metrics_addr` | string | `:2112` | Prometheus 指标暴露地址 |
 | `peers` | []string | `[]` | 集群节点 Raft HTTP 地址列表 |
+| `peer_addresses` | map[string]string | `{}` | 节点 ID → gRPC 地址映射（Phase 2 leader 发现） |
 | `heartbeat_ms` | int | `200` | Leader 心跳间隔（毫秒） |
 | `election_ms` | int | `1200` | 选举超时基准值（毫秒），实际超时 = `election_ms + random(0..election_ms)` |
 | `hot_reload` | bool | `false` | 是否启用配置文件热重载（每秒轮询） |
@@ -741,7 +778,8 @@ graph LR
 1. **每个节点需要独立的端口** — gRPC、HTTP、Raft、Metrics 各自使用不同端口
 2. **所有节点的 `peers` 列表必须一致** — 包含集群中所有节点的 Raft HTTP 地址
 3. **建议至少 3 个节点** — Raft 需要多数派确认，2 个节点无法容忍任何故障
-4. **客户端可连接任意节点** — 当前分布式读写都应命中 Leader；Follower 默认返回 `FailedPrecondition`
+4. **客户端推荐使用 `NewCluster` 自动切主** — 多节点 client 自动发现 Leader，遇到 `not leader` 错误自动重试并切到新 Leader
+5. **Single-node client 仍可连接任意节点** — 但分布式写需命中 Leader，Follower 返回 `FailedPrecondition`
 
 ### 动态扩缩容
 

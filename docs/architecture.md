@@ -49,6 +49,7 @@ flowchart LR
 - 服务层 `pkg/server/server.go` 将请求转为 `command.*` 并通过 `pkg/fsm` 应用到 `pkg/cache`
 - 分布式模式下，写操作通过 `pkg/raft` 实现共识、WAL 持久化、snapshot/compaction，再应用到 FSM
 - 分布式读当前采用 Leader 线性一致读，Follower 直接返回 `FailedPrecondition`
+- 集群模式下 Client SDK (`NewCluster`) 自动发现 Leader、自动重试/切主
 - 缓存层使用 HashMap + Radix Tree + Min-Heap/ExpirationIndex 维护读写、搜索与 TTL
 - `pkg/cache/persistence.go` 的 Dump/Load 主要用于 single 模式缓存持久化；distributed 模式恢复依赖 Raft snapshot + WAL replay
 - 配置管理 `pkg/config/config.go` 支持 YAML 加载、原子配置与有限热重载
@@ -103,7 +104,7 @@ sequenceDiagram
 - 共识层：`pkg/raft` (Raft 选举、日志复制、snapshot/compaction、InstallSnapshot，含 `peer.go` 地址规范化)
 - 缓存引擎：`pkg/cache` (CRUD、TTL 过期、前缀/正则搜索、single 模式 Dump/Load 持久化)
 - 基础设施层：`pkg/config` (配置管理)、`pkg/log` (日志)、`pkg/metrics` (指标)、`pkg/utils` (工具)
-- 客户端：`pkg/client` (gRPC 客户端 SDK)
+- 客户端：`pkg/client` (gRPC 客户端 SDK，含自动 Leader 切主)、`pkg/client/resolver` (gRPC Name Resolver)
 
 ## 现状评估
 - 读写分离通过 `InstrumentedRWMutex` 与过期清理协程实现

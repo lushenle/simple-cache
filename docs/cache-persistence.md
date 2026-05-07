@@ -81,7 +81,7 @@ data/cache-{node_id}.dump.tmp    # 写入中的临时文件
 │              File Header (16 bytes)       │
 ├──────────────────────────────────────────┤
 │ Magic    [4 bytes] "SCDF"                │  文件魔数
-│ Version  [4 bytes] uint32 = 1            │  格式版本
+│ Version  [4 bytes] uint32 = 2            │  (v1 backward compat)  格式版本
 │ Count    [4 bytes] uint32                │  key-value 条目数
 │ Flags    [4 bytes] uint32                │  保留标志位
 ├──────────────────────────────────────────┤
@@ -93,6 +93,8 @@ data/cache-{node_id}.dump.tmp    # 写入中的临时文件
 │ Value    [ValLen bytes]                  │  value 数据
 │ ExpUnix  [8 bytes] int64                 │  过期时间 Unix 纳秒 (0=永不过期)
 │ HasExp   [1 byte]  bool                  │  是否有过期时间
+│ VTLen    [4 bytes] uint32                │  value_type 长度 (v2+)
+│ ValueType [VTLen bytes]                  │  序列化类型名称 (v2+)
 ├──────────────────────────────────────────┤
 │           ... more entries ...            │
 ├──────────────────────────────────────────┤
@@ -107,7 +109,7 @@ data/cache-{node_id}.dump.tmp    # 写入中的临时文件
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "node_id": "node-1",
   "dumped_at": "2026-04-09T10:30:00Z",
   "total_keys": 1000,
@@ -153,7 +155,7 @@ data/cache-{node_id}.dump.tmp    # 写入中的临时文件
 | 原始类型                    | 序列化方式             | value_type | 反序列化后类型                        |
 | --------------------------- | ---------------------- | ---------- | ------------------------------------- |
 | `string`                    | 直接存储               | `"string"` | `string`                              |
-| `[]byte`                    | `string(val)` 直接转换 | `"bytes"`  | `[]byte`（注意：非 UTF-8 字节会丢失） |
+| `[]byte`                    | base64.StdEncoding | `"bytes"`  | `[]byte`（base64 编码，支持任意字节，v2 特性） |
 | `json.Marshal` 可处理的类型 | JSON 编码              | `"json"`   | `string`（JSON 字符串）               |
 | 其他类型                    | `fmt.Sprintf("%v", v)` | `"other"`  | `string`                              |
 
