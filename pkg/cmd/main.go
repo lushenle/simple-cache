@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -42,6 +43,12 @@ func main() {
 
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", promhttp.Handler())
+	// pprof endpoints for runtime profiling (on metrics port, separate from data plane)
+	metricsMux.HandleFunc("/debug/pprof/", pprof.Index)
+	metricsMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	metricsMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	metricsMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	metricsMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
 	plugin := log.NewStdoutPlugin(zapcore.InfoLevel)
 	logger := log.NewLogger(plugin)
@@ -54,6 +61,7 @@ func main() {
 	if err != nil {
 		logger.Fatal("failed to load config", zap.Error(err), zap.String("path", cfgPath))
 	}
+	cfg.OverrideFromEnv()
 	if err := cfg.Validate(); err != nil {
 		logger.Fatal("invalid configuration", zap.Error(err))
 	}

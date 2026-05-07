@@ -77,6 +77,53 @@ func Load(path string) (*Config, error) {
 }
 
 // Validate checks the configuration for common errors.
+func (c *Config) OverrideFromEnv() {
+	if v := os.Getenv("SIMPLE_CACHE_MODE"); v != "" {
+		c.Mode = common.Mode(v)
+	}
+	if v := os.Getenv("SIMPLE_CACHE_NODE_ID"); v != "" {
+		c.NodeID = v
+	}
+	if v := os.Getenv("SIMPLE_CACHE_GRPC_ADDR"); v != "" {
+		c.GRPCAddr = v
+	}
+	if v := os.Getenv("SIMPLE_CACHE_HTTP_ADDR"); v != "" {
+		c.HTTPAddr = v
+	}
+	if v := os.Getenv("SIMPLE_CACHE_RAFT_HTTP_ADDR"); v != "" {
+		c.RaftHTTPAddr = v
+	}
+	if v := os.Getenv("SIMPLE_CACHE_METRICS_ADDR"); v != "" {
+		c.MetricsAddr = v
+	}
+	if v := os.Getenv("SIMPLE_CACHE_AUTH_TOKEN"); v != "" {
+		c.AuthToken = v
+	}
+	if v := os.Getenv("SIMPLE_CACHE_DATA_DIR"); v != "" {
+		c.DataDir = v
+	}
+	if v := os.Getenv("SIMPLE_CACHE_MAX_KEYS"); v != "" {
+		if n, err := fmt.Sscanf(v, "%d", &c.MaxKeys); err == nil && n == 1 {
+		}
+	}
+	if v := os.Getenv("SIMPLE_CACHE_MAX_VALUE_SIZE"); v != "" {
+		if n, err := fmt.Sscanf(v, "%d", &c.MaxValueSize); err == nil && n == 1 {
+		}
+	}
+	if v := os.Getenv("SIMPLE_CACHE_MAX_QPS"); v != "" {
+		if n, err := fmt.Sscanf(v, "%d", &c.MaxQPS); err == nil && n == 1 {
+		}
+	}
+	if v := os.Getenv("SIMPLE_CACHE_HEARTBEAT_MS"); v != "" {
+		if n, err := fmt.Sscanf(v, "%d", &c.HeartbeatMS); err == nil && n == 1 {
+		}
+	}
+	if v := os.Getenv("SIMPLE_CACHE_ELECTION_MS"); v != "" {
+		if n, err := fmt.Sscanf(v, "%d", &c.ElectionMS); err == nil && n == 1 {
+		}
+	}
+}
+
 func (c *Config) Validate() error {
 	switch c.Mode {
 	case common.ModeSingle, common.ModeDistributed:
