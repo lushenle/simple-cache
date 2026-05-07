@@ -17,6 +17,7 @@ package resolver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -52,7 +53,7 @@ func (b *Builder) Build(target gresolver.Target, cc gresolver.ClientConn, opts g
 	// The endpoint format is "host1:port1,host2:port2,..."
 	peers := parseTarget(target)
 	if len(peers) == 0 {
-		return nil, gresolver.ErrMissingEndpoints
+		return nil, fmt.Errorf("simplecache resolver: no endpoints in target URI")
 	}
 
 	interval := b.ProbeInterval
