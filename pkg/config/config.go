@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"net"
 	"os"
 	"sync/atomic"
 	"time"
@@ -33,6 +35,9 @@ type Config struct {
 	AllowedOrigins    []string          `yaml:"allowed_origins"`
 	SnapshotEnabled   bool              `yaml:"snapshot_enabled"`
 	SnapshotThreshold uint64            `yaml:"snapshot_threshold"`
+	MaxKeys           int               `yaml:"max_keys"`            // max cache keys (0 = unlimited)
+	MaxValueSize      int               `yaml:"max_value_size"`      // max value size in bytes (0 = unlimited)
+	MaxQPS            int               `yaml:"max_qps"`             // max requests/sec per client (0 = unlimited)
 }
 
 func Default() *Config {
@@ -69,6 +74,61 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return d, nil
+}
+
+// Validate checks the configuration for common errors.
+func (c *Config) Validate() error {
+	switch c.Mode {
+	case common.ModeSingle, common.ModeDistributed:
+	default:
+		return fmt.Errorf("invalid mode: %q (expected 'single' or 'distributed')", c.Mode)
+	}
+	if c.NodeID == "" {
+		return fmt.Errorf("node_id must not be empty")
+	}
+	for name, addr := range map[string]string{
+		"grpc_addr":     c.GRPCAddr,
+		"http_addr":     c.HTTPAddr,
+		"raft_http_addr": c.RaftHTTPAddr,
+		"metrics_addr":  c.MetricsAddr,
+	} {
+		if addr == "" {
+			return fmt.Errorf("%s must not be empty", name)
+		}
+		if _, err := net.ResolveTCPAddr("tcp", addr); err != nil {
+			return fmt.Errorf("%s: invalid address: %w", name, err)
+		}
+	}
+	if c.Mode.IsDistributed() && len(c.Peers) == 0 {
+		return fmt.Errorf("peers must not be empty in distributed mode")
+	}
+	if c.HeartbeatMS <= 0 {
+		return fmt.Errorf("heartbeat_ms must be positive")
+	}
+	if c.ElectionMS <= c.HeartbeatMS {
+		return fmt.Errorf("election_ms (%d) must be greater than heartbeat_ms (%d)", c.ElectionMS, c.HeartbeatMS)
+	}
+	if c.SnapshotEnabled && c.SnapshotThreshold == 0 {
+		return fmt.Errorf("snapshot_threshold must be > 0 when snapshot_enabled is true")
+	}
+	if c.EnableTLS {
+		if c.TLSCertFile == "" {
+			return fmt.Errorf("tls_cert_file must not be empty when enable_tls is true")
+		}
+		if c.TLSKeyFile == "" {
+			return fmt.Errorf("tls_key_file must not be empty when enable_tls is true")
+		}
+	}
+	if c.MaxKeys < 0 {
+		return fmt.Errorf("max_keys must not be negative")
+	}
+	if c.MaxValueSize < 0 {
+		return fmt.Errorf("max_value_size must not be negative")
+	}
+	if c.MaxQPS < 0 {
+		return fmt.Errorf("max_qps must not be negative")
+	}
+	return nil
 }
 
 type AtomicConfig struct {
