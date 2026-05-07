@@ -112,6 +112,12 @@ func main() {
 		srv.UseRaft(raftNode)
 	}
 
+	// Phase 2: configure cluster metadata for leader discovery.
+	srv.SetGRPCAddr(cfg.GRPCAddr)
+	if cfg.PeerAddresses != nil {
+		srv.SetPeerMap(cfg.PeerAddresses)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	waitGroup, ctx := errgroup.WithContext(ctx)
 	waitGroup.Go(func() error {
@@ -141,6 +147,8 @@ func main() {
 	}
 	grpcServer := grpc.NewServer(grpcOptions...)
 	pb.RegisterCacheServiceServer(grpcServer, srv)
+	// Phase 2: register cluster-info service for leader discovery.
+	grpcServer.RegisterService(&server.SimpleCacheInfoServiceDesc, server.NewClusterInfoHandler(srv))
 
 	// Graceful shutdown on SIGINT/SIGTERM
 	sigCh := make(chan os.Signal, 1)

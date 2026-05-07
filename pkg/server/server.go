@@ -10,33 +10,72 @@ import (
 	"github.com/lushenle/simple-cache/pkg/pb"
 	"github.com/lushenle/simple-cache/pkg/raft"
 	"github.com/lushenle/simple-cache/pkg/utils"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
+// ProbeStatus is returned by the health and readiness endpoints.
 type ProbeStatus struct {
-	Status   common.ProbeState `json:"status"`
-	Mode     common.Mode       `json:"mode"`
-	Ready    bool              `json:"ready"`
-	Role     string            `json:"role"`
-	LeaderID string            `json:"leader_id,omitempty"`
-	Details  map[string]any    `json:"details,omitempty"`
+	Status         common.ProbeState `json:"status"`
+	Mode           common.Mode       `json:"mode"`
+	Ready          bool              `json:"ready"`
+	Role           string            `json:"role"`
+	LeaderID       string            `json:"leader_id,omitempty"`
+	LeaderGRPCAddr string            `json:"leader_grpc_addr,omitempty"`
+	GRPCAddr       string            `json:"grpc_addr,omitempty"`
+	Details        map[string]any    `json:"details,omitempty"`
 }
 
+// GetLeaderResponse is the response for the GetLeader RPC.
+type GetLeaderResponse struct {
+	LeaderID       string
+	LeaderGRPCAddr string
+	IsLeader       bool
+}
+
+// CacheService implements the cache RPCs and cluster management.
 type CacheService struct {
 	pb.UnimplementedCacheServiceServer
-	fsm    *fsm.FSM
-	node   *raft.Node
-	nodeID string
+	fsm      *fsm.FSM
+	node     *raft.Node
+	nodeID   string
+	grpcAddr string                 // this node's gRPC address
+	peerMap  map[string]string      // nodeID → gRPC address for all known peers
 }
 
+// New creates a CacheService in single-node mode.
 func New(c *cache.Cache, nodeID string) *CacheService {
 	return &CacheService{
-		fsm:    fsm.New(c),
-		nodeID: nodeID,
+		fsm:     fsm.New(c),
+		nodeID:  nodeID,
+		peerMap: make(map[string]string),
 	}
 }
 
+// NewWithCluster creates a CacheService with cluster-awareness.
+// grpcAddr is this node's own gRPC address.
+// peerMap maps nodeID to gRPC address for every node in the cluster.
+func NewWithCluster(c *cache.Cache, nodeID, grpcAddr string, peerMap map[string]string) *CacheService {
+	return &CacheService{
+		fsm:      fsm.New(c),
+		nodeID:   nodeID,
+		grpcAddr: grpcAddr,
+		peerMap:  peerMap,
+	}
+}
+
+// SetGRPCAddr sets this node's gRPC address (used if NewWithCluster was not called).
+func (s *CacheService) SetGRPCAddr(addr string) {
+	s.grpcAddr = addr
+}
+
+// SetPeerMap sets the nodeID→gRPC address mapping.
+func (s *CacheService) SetPeerMap(m map[string]string) {
+	s.peerMap = m
+}
+
+// UseRaft attaches a Raft node for distributed mode.
 func (s *CacheService) UseRaft(n *raft.Node) {
 	s.node = n
 }
@@ -60,21 +99,54 @@ func (s *CacheService) Role() string {
 	return string(s.node.Role())
 }
 
+// GetLeader returns the current leader's ID and gRPC address.
+func (s *CacheService) GetLeader(ctx context.Context) (*GetLeaderResponse, error) {
+	if s.node == nil {
+		return &GetLeaderResponse{
+			LeaderID:       s.nodeID,
+			LeaderGRPCAddr: s.grpcAddr,
+			IsLeader:       true,
+		}, nil
+	}
+	leaderID := s.node.LeaderID()
+	if leaderID == "" {
+		return &GetLeaderResponse{}, nil
+	}
+	isLeader := leaderID == s.nodeID
+	leaderAddr := s.peerMap[leaderID]
+	if leaderAddr == "" && isLeader {
+		leaderAddr = s.grpcAddr
+	}
+	return &GetLeaderResponse{
+		LeaderID:       leaderID,
+		LeaderGRPCAddr: leaderAddr,
+		IsLeader:       isLeader,
+	}, nil
+}
+
+// HealthStatus returns the node's health.
 func (s *CacheService) HealthStatus() ProbeStatus {
 	status := ProbeStatus{
-		Status: common.ProbeStateOK,
-		Mode:   common.ModeSingle,
-		Ready:  true,
-		Role:   s.Role(),
+		Status:   common.ProbeStateOK,
+		Mode:     common.ModeSingle,
+		Ready:    true,
+		Role:     s.Role(),
+		GRPCAddr: s.grpcAddr,
 	}
 	if s.node != nil {
 		status.Mode = common.ModeDistributed
 		status.LeaderID = s.node.LeaderID()
 		status.Details = s.node.Status()
+		// Phase 2: populate the leader's gRPC address for client fast redirect.
+		status.LeaderGRPCAddr = s.peerMap[status.LeaderID]
+		if status.LeaderGRPCAddr == "" && s.Role() == "leader" {
+			status.LeaderGRPCAddr = s.grpcAddr
+		}
 	}
 	return status
 }
 
+// ReadinessStatus returns the node's readiness.
 func (s *CacheService) ReadinessStatus() ProbeStatus {
 	status := s.HealthStatus()
 	if s.node == nil {
@@ -258,4 +330,56 @@ func (s *CacheService) Load(ctx context.Context, req *pb.LoadRequest) (*pb.LoadR
 // NodeID returns the node ID for use in dump file naming.
 func (s *CacheService) NodeID() string {
 	return s.nodeID
+}
+
+// ---------------------------------------------------------------------------
+// SimpleCacheInfo service descriptor – provides GetLeader as a programmatic
+// gRPC endpoint without protobuf regeneration (Phase 2).
+// ---------------------------------------------------------------------------
+
+// simpleCacheInfoServer is the server-side handler for the info service.
+type simpleCacheInfoServer struct {
+	svr *CacheService
+}
+
+// GetLeader returns the current leader's information.
+func (s *simpleCacheInfoServer) GetLeader(ctx context.Context, req *GetLeaderRequest) (*GetLeaderResponse, error) {
+	return s.svr.GetLeader(ctx)
+}
+
+// GetLeaderRequest is the (empty) request for GetLeader.
+type GetLeaderRequest struct{}
+
+// SimpleCacheInfoServiceDesc is a programmatically-registered gRPC service
+// that exposes cluster metadata (primarily GetLeader).
+//
+// Usage in main.go:
+//
+//	grpcServer.RegisterService(&server.SimpleCacheInfoServiceDesc, infoHandler)
+var SimpleCacheInfoServiceDesc = grpc.ServiceDesc{
+	ServiceName: "simplecache.ClusterInfo",
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetLeader",
+			Handler: func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+				if interceptor == nil {
+					return srv.(*simpleCacheInfoServer).GetLeader(ctx, nil)
+				}
+				info := &GetLeaderRequest{}
+				return interceptor(ctx, info, &grpc.UnaryServerInfo{
+					Server:     srv,
+					FullMethod: "/simplecache.ClusterInfo/GetLeader",
+				}, func(ctx context.Context, req interface{}) (interface{}, error) {
+					return srv.(*simpleCacheInfoServer).GetLeader(ctx, req.(*GetLeaderRequest))
+				})
+			},
+		},
+	},
+	Streams:  nil,
+	Metadata: "cluster_info",
+}
+
+// NewClusterInfoHandler creates the handler for the SimpleCacheInfo service.
+func NewClusterInfoHandler(svr *CacheService) interface{} {
+	return &simpleCacheInfoServer{svr: svr}
 }
