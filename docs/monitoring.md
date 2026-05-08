@@ -16,8 +16,13 @@
 - `raft_leader_changes_total`
 - `raft_append_entries_latency_seconds_bucket`
 - `simple_cache_peers_total` 集群 Peer 数量
+- `raft_pending_entries` 待应用的日志条目数
+- `raft_snapshot_age_seconds` 最新 snapshot 年龄
 
-> 当前尚未暴露独立的 snapshot/compaction 专用指标；可通过 `raft_commit_index`、`raft_last_applied` 与日志观察恢复/压缩行为。
+> 可通过 `raft_commit_index`、`raft_last_applied` 与 `raft_pending_entries` 观察恢复/压缩行为。
+
+## 缓存管理指标
+- `cache_evictions_total` LRU 淘汰总次数
 
 ## 持久化指标
 - `cache_persistence_op_total{op="dump|load",status="success|error"}` 持久化操作计数

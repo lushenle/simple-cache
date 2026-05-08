@@ -369,7 +369,19 @@ watch -n 1 'curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/ready
 - 是否真的已有足够多的已应用日志
 - `data_dir` 是否可写
 
-### 9.5 WAL 持续增长
+### 9.5 LRU 淘汰异常
+如果配置了 `eviction_policy: lru` 但观察不到淘汰：
+- 确认 `max_keys` 已设置且 > 0
+- 检查 `cache_evictions_total` 指标是否在增长
+- 验证 `cache_size_bytes` 是否已接近容量上限
+
+### 9.6 Watch 推送延迟
+如果客户端收不到 Watch 事件：
+- 确认客户端已正确调用 `Watch(ctx, pattern)`
+- 确认事件类型匹配（Set/Del/Expire）
+- 检查 subscriber buffer（默认 64），消费过慢时事件会丢失
+
+### 9.7 WAL 持续增长
 
 先确认：
 
@@ -414,6 +426,10 @@ curl -X POST http://localhost:8080/cluster/leave \
   -H "Content-Type: application/json" \
   -H "X-Api-Token: <token>" \
   -d '{"addr":"http://127.0.0.1:9093"}'
+
+# 优雅领导权移交（主动触发选举）
+curl -X POST http://localhost:8080/cluster/stepdown \
+  -H "X-Api-Token: <token>"
 ```
 
 ### 11.3 观察数据文件

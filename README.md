@@ -487,6 +487,8 @@ simple-cache/
 | `ExpireKey` | `ExpireKeyRequest{key, expire}` | `ExpireKeyResponse{success, existed}` | 设置过期时间 |
 | `Dump` | `DumpRequest{format, path}` | `DumpResponse{success, total_keys, file_size, path, format, duration_ms}` | 导出缓存数据到文件 |
 | `Load` | `LoadRequest{path}` | `LoadResponse{success, total_keys, loaded_keys, skipped_keys, path, duration_ms}` | 从文件导入缓存数据 |
+| `BatchSet` | `stream BatchSetRequest` | `BatchSetResponse{success_count, error_count, first_error}` | 流式批量写入 |
+| `Watch` | `WatchRequest{pattern}` | `stream WatchEvent{type, key, value}` | 订阅键变更事件 |
 
 **SearchRequest.MatchMode**：
 - `WILDCARD (0)` — 通配符匹配（默认），支持 `*`、`?`、`[...]`
@@ -505,6 +507,8 @@ simple-cache/
 | `GET` | `/v1/search/{pattern}` | 通配符搜索 |
 | `GET` | `/v1/search/{pattern}/{mode}` | 按模式搜索（`wildcard` 或 `regex`） |
 | `POST` | `/v1/{key}/expire` | 设置过期时间 |
+| `POST` | `/v1/batch-set` | 流式批量写入 |
+| `GET` | `/v1/watch` | 订阅键变更事件 |
 | `POST` | `/v1/dump` | 导出缓存数据 |
 | `POST` | `/v1/load` | 导入缓存数据 |
 
@@ -714,6 +718,8 @@ conn, err := grpc.NewClient("simplecache:///:5051,:5052,:5053",
 | `ExpireKey` | `ExpireKey(ctx, key, ttl) (existed, error)` | 设置过期时间 |
 | `Reset` | `Reset(ctx) (cleared, error)` | 清空缓存 |
 | `BatchSet` | `BatchSet(ctx, items, ttl) error` | 批量设置 |
+| `BatchSetStream` | `BatchSetStream(ctx, items, ttl) (int, int, error)` | 流式批量写入（gRPC streaming） |
+| `Watch` | `Watch(ctx, pattern) (<-chan WatchEvent, error)` | 订阅键变更事件 |
 
 ---
 
@@ -745,6 +751,10 @@ conn, err := grpc.NewClient("simplecache:///:5051,:5052,:5053",
 | `allowed_origins` | []string | `[]` | HTTP CORS 白名单 |
 | `snapshot_enabled` | bool | `true` | distributed 模式下是否启用 Raft snapshot |
 | `snapshot_threshold` | uint64 | `1024` | 距离上一次 snapshot 的已应用日志条数达到阈值后触发压缩 |
+| `max_keys` | int | `0` | 最大 key 数（0 = 不限） |
+| `max_value_size` | int | `0` | 单 value 最大字节数（0 = 不限） |
+| `max_qps` | int | `0` | 全局每秒请求数限制（0 = 不限） |
+| `eviction_policy` | string | `none` | 淘汰策略：`none`（拒绝写入）或 `lru`（淘汰最近最少使用） |
 
 > **注意**：`grpc_addr`、`http_addr`、`raft_http_addr`、`metrics_addr` 在服务启动时绑定，不支持热重载。
 
@@ -824,12 +834,20 @@ curl -X POST http://localhost:8080/cluster/leave \
 | `raft_leader_changes_total` | Counter | — | Leader 变更次数 |
 | `raft_append_entries_latency_seconds` | Histogram | — | AppendEntries 广播延迟 |
 | `simple_cache_peers_total` | Gauge | — | 集群 Peer 数量 |
+| `raft_pending_entries` | Gauge | — | 待应用的日志条目数 |
+| `raft_snapshot_age_seconds` | Gauge | — | 最新 snapshot 年龄（秒） |
 
 ### 系统指标
 
 | 指标名 | 类型 | 标签 | 说明 |
 |--------|------|------|------|
 | `process_memory_bytes` | Gauge | `state` | 进程内存（`alloc` / `total`） |
+
+### 缓存管理指标
+
+| 指标名 | 类型 | 标签 | 说明 |
+|--------|------|------|------|
+| `cache_evictions_total` | Counter | — | LRU 淘汰总次数 |
 
 ### 持久化指标
 
