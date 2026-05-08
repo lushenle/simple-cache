@@ -162,6 +162,20 @@ var (
 		},
 	)
 
+	RaftPendingEntries = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "raft_pending_entries",
+			Help: "Number of log entries not yet applied to state machine",
+		},
+	)
+
+	RaftSnapshotAge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "raft_snapshot_age_seconds",
+			Help: "Age of the latest snapshot in seconds",
+		},
+	)
+
 	// Persistence metrics
 	PersistenceOpTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -214,6 +228,8 @@ func Init() {
 			RaftLeaderChanges,
 			RaftAppendEntriesLatency,
 			PeersTotal,
+			RaftPendingEntries,
+			RaftSnapshotAge,
 			PersistenceOpTotal,
 			PersistenceDuration,
 			DumpKeysGauge,
@@ -291,6 +307,8 @@ func SetRaftLastApplied(v uint64)                 { RaftLastApplied.Set(float64(
 func IncRaftLeaderChanges()                       { RaftLeaderChanges.Inc() }
 func ObserveAppendEntriesLatency(d time.Duration) { RaftAppendEntriesLatency.Observe(d.Seconds()) }
 func SetPeersTotal(n int)                         { PeersTotal.Set(float64(n)) }
+func SetRaftPendingEntries(n int)              { RaftPendingEntries.Set(float64(n)) }
+func SetRaftSnapshotAge(seconds float64)        { RaftSnapshotAge.Set(seconds) }
 
 // Persistence metrics helpers
 func IncPersistenceOp(op, status string) { PersistenceOpTotal.WithLabelValues(op, status).Inc() }

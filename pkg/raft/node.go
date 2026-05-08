@@ -730,6 +730,7 @@ func (n *Node) createSnapshot(index, term uint64) error {
 	}
 	n.snapshotIndex = index
 	n.snapshotTerm = term
+	metrics.SetRaftSnapshotAge(0)
 	if n.lastApply < index {
 		n.lastApply = index
 	}
@@ -896,6 +897,9 @@ func (n *Node) applyCommittedEntries() error {
 		}
 		n.lastApply = nextIndex
 		metrics.SetRaftLastApplied(n.lastApply)
+		if n.commitIdx >= n.lastApply {
+			metrics.SetRaftPendingEntries(int(n.commitIdx - n.lastApply))
+		}
 		waiter := n.applyWaiter[entry.Index]
 		if waiter != nil {
 			delete(n.applyWaiter, entry.Index)
