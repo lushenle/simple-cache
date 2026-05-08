@@ -112,6 +112,12 @@ func main() {
 		srv.UseRaft(raftNode)
 	}
 
+	// Phase 2: configure cluster metadata for leader discovery.
+	srv.SetGRPCAddr(cfg.GRPCAddr)
+	if cfg.PeerAddresses != nil {
+		srv.SetPeerMap(cfg.PeerAddresses)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	waitGroup, ctx := errgroup.WithContext(ctx)
 	waitGroup.Go(func() error {

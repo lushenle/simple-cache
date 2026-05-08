@@ -18,6 +18,7 @@ type Config struct {
 	RaftHTTPAddr      string            `yaml:"raft_http_addr"`
 	MetricsAddr       string            `yaml:"metrics_addr"`
 	Peers             []string          `yaml:"peers"`
+	PeerAddresses     map[string]string `yaml:"peer_addresses"` // nodeID → gRPC addr (Phase 2 leader discovery)
 	HeartbeatMS       int               `yaml:"heartbeat_ms"`
 	ElectionMS        int               `yaml:"election_ms"`
 	HotReload         bool              `yaml:"hot_reload"`
