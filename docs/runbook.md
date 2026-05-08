@@ -11,7 +11,7 @@
   - snapshot / log compaction
   - `InstallSnapshot` 追平落后 follower
 
-> 当前 distributed 模式下，读写请求都应命中 Leader。Follower 默认不对业务流量返回 ready。
+> 当前 distributed 模式下，读写请求都应命中 Leader。Follower 默认不对业务流量返回 ready。推荐使用 `NewCluster` 客户端（自动发现 Leader、自动切主）。
 
 ## 2. 关键事实
 
@@ -289,6 +289,8 @@ curl http://<node-metrics>/metrics | grep -E 'raft_commit_index|raft_last_applie
 3. 找到返回 `200` 的新 Leader
 4. 业务流量切到新 Leader
 5. 原 Leader 恢复后会以 follower 身份重新加入
+
+> 如果使用了 `NewCluster` 客户端，步骤 2-4 由客户端自动完成（后台健康检查 + 自动切主），无需人工干预。
 
 建议操作：
 

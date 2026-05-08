@@ -13,6 +13,7 @@
 | `raft_http_addr` | string | `:9090` | Raft 传输地址 |
 | `metrics_addr` | string | `:2112` | Prometheus 指标地址 |
 | `peers` | []string | `[]` | 同集群节点 Raft HTTP 地址列表 |
+| `peer_addresses` | map[string]string | `{}` | 节点 ID → gRPC 地址映射（Leader 快速发现） |
 | `heartbeat_ms` | int | `200` | Leader 心跳间隔（毫秒） |
 | `election_ms` | int | `1200` | 选举超时基准值（毫秒） |
 | `hot_reload` | bool | `false` | 是否开启配置文件热加载 |
