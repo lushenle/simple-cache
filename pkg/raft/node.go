@@ -869,7 +869,6 @@ func (n *Node) advanceCommitLocked() bool {
 			n.commitIdx = idx
 			metrics.SetRaftCommitIndex(n.commitIdx)
 			_ = n.storage.SaveMeta(n.metaLocked())
-				n.leaseUntil = time.Now().Add(n.el).UnixNano()
 			return true
 		}
 	}
@@ -1062,12 +1061,83 @@ func (n *Node) stepDownLocked(term uint64) {
 	}
 }
 
-// LeaderLeaseOK returns true if the node is the leader and its lease
-// has not expired. This provides linearizable reads: as long as the
-// leader has replicated to a majority within the election timeout, it
-// can safely serve reads without contacting followers.
-func (n *Node) LeaderLeaseOK() bool {
-	return n.Role() == Leader && atomic.LoadInt64(&n.leaseUntil) > time.Now().UnixNano()
+// ReadIndex performs a quorum check and returns the current safe commit
+// index.  It implements the Raft ReadIndex protocol: the leader records its
+// commit index, sends a no-op heartbeat to confirm it is still the leader,
+// and returns the commit index when a majority has acknowledged.
+func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
+	if n.Role() != Leader {
+		return 0, ErrNotLeader{Leader: n.leaderID.Load().(string)}
+	}
+	// Record the current commit index.
+	n.mu.Lock()
+	idx := n.commitIdx
+	n.mu.Unlock()
+	// Perform a quorum heartbeat to confirm leadership.
+	if err := n.heartbeatRound(ctx); err != nil {
+		return 0, err
+	}
+	// Re-check role after the heartbeat round.
+	if n.Role() != Leader {
+		return 0, ErrNotLeader{Leader: n.leaderID.Load().(string)}
+	}
+	return idx, nil
+}
+
+// heartbeatRound sends an empty AppendEntries (heartbeat) to all followers
+// and waits for a majority to acknowledge within the context deadline.
+func (n *Node) heartbeatRound(ctx context.Context) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, n.hb*2)
+		defer cancel()
+		deadline, _ = ctx.Deadline()
+	}
+	type ack struct {
+		peer string
+		err  error
+	}
+	peers := n.trans.Peers()
+	ch := make(chan ack, len(peers))
+	// Send heartbeats concurrently.
+	for _, peer := range peers {
+		if n.trans.isSelf(peer) {
+			continue
+		}
+		go func(p string) {
+			n.mu.Lock()
+			req := AppendEntriesReq{
+				Term:         n.term,
+				LeaderID:     n.id,
+				PrevLogIndex: n.lastLogIndex,
+				PrevLogTerm:  n.lastLogTerm,
+				CommitIdx:    n.commitIdx,
+			}
+			n.mu.Unlock()
+			pctx, cancel := context.WithDeadline(ctx, deadline)
+			defer cancel()
+			_, err := n.trans.sendAppend(pctx, p, req)
+			ch <- ack{peer: p, err: err}
+		}(peer)
+	}
+	// Count responses.
+	votes := 1 // self-vote
+	total := len(peers)
+	for i := 0; i < total-1; i++ {
+		select {
+		case a := <-ch:
+			if a.err == nil {
+				votes++
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if votes >= total/2+1 {
+		return nil
+	}
+	return fmt.Errorf("heartbeat round failed: got %d/%d votes", votes, total/2+1)
 }
 
 // StepDown forces the current leader to step down, incrementing the term

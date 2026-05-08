@@ -238,22 +238,22 @@ func (s *CacheService) Peers() []string {
 }
 
 // checkLeaderRead returns nil if the node can safely serve reads.
-// In distributed mode, it checks both role and leader lease.
-func (s *CacheService) checkLeaderRead() error {
+// In distributed mode it runs the ReadIndex protocol to guarantee
+// linearizable consistency.
+func (s *CacheService) checkLeaderRead(ctx context.Context) error {
 	if s.node == nil {
 		return nil // single mode
 	}
-	if s.node.Role() != raft.Leader {
-		return status.Error(codes.FailedPrecondition, "not leader")
-	}
-	if !s.node.LeaderLeaseOK() {
-		return status.Error(codes.FailedPrecondition, "leader lease expired")
+	riCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	if _, err := s.node.ReadIndex(riCtx); err != nil {
+		return status.Errorf(codes.FailedPrecondition, "read index check failed: %v", err)
 	}
 	return nil
 }
 
 func (s *CacheService) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
-	if err := s.checkLeaderRead(); err != nil {
+	if err := s.checkLeaderRead(ctx); err != nil {
 		return nil, err
 	}
 	if !s.rl.Allow("") {
@@ -351,7 +351,7 @@ func (s *CacheService) Reset(ctx context.Context, req *pb.ResetRequest) (*pb.Res
 }
 
 func (s *CacheService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.SearchResponse, error) {
-	if err := s.checkLeaderRead(); err != nil {
+	if err := s.checkLeaderRead(ctx); err != nil {
 		return nil, err
 	}
 	if !s.rl.Allow("") {
