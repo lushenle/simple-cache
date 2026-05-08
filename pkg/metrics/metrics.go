@@ -59,6 +59,13 @@ var (
 		[]string{"op"},
 	)
 
+	EvictionsTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "cache_evictions_total",
+			Help: "Total number of cache evictions",
+		},
+	)
+
 	KeysTotal = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "simple_cache_keys_total",
