@@ -3,6 +3,7 @@ package raft
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,6 +38,108 @@ func (s *Storage) AppendEntry(entry LogEntry) error {
 	return s.AppendEntries([]LogEntry{entry})
 }
 
+// binaryWALVersion marks the binary format version.
+const binaryWALVersion byte = 1
+
+// encodeEntryBinary serializes a single log entry to binary.
+func encodeEntryBinary(e LogEntry) []byte {
+	buf := make([]byte, 0, 32+len(e.Type)+len(e.Data))
+	buf = binary.BigEndian.AppendUint64(buf, e.Index)
+	buf = binary.BigEndian.AppendUint64(buf, e.Term)
+	typeStr := string(e.Type)
+	buf = binary.BigEndian.AppendUint32(buf, uint32(len(typeStr)))
+	buf = append(buf, typeStr...)
+	buf = binary.BigEndian.AppendUint32(buf, uint32(len(e.Data)))
+	buf = append(buf, e.Data...)
+	return buf
+}
+
+// decodeEntryBinary decodes a single log entry from binary data.
+func decodeEntryBinary(data []byte) (LogEntry, []byte, error) {
+	if len(data) < 20 {
+		return LogEntry{}, data, fmt.Errorf("entry too short: %d bytes", len(data))
+	}
+	index := binary.BigEndian.Uint64(data[0:8])
+	term := binary.BigEndian.Uint64(data[8:16])
+	typeLen := binary.BigEndian.Uint32(data[16:20])
+	offset := 20
+	if uint64(len(data)) < uint64(offset)+uint64(typeLen)+4 {
+		return LogEntry{}, data, fmt.Errorf("truncated entry type")
+	}
+	typeStr := string(data[offset : offset+int(typeLen)])
+	offset += int(typeLen)
+	if len(data) < offset+4 {
+		return LogEntry{}, data, fmt.Errorf("truncated entry data length")
+	}
+	dataLen := binary.BigEndian.Uint32(data[offset : offset+4])
+	offset += 4
+	if uint64(len(data)) < uint64(offset)+uint64(dataLen) {
+		return LogEntry{}, data, fmt.Errorf("truncated entry data")
+	}
+	entry := LogEntry{
+		Index: index,
+		Term:  term,
+		Type:  EntryType(typeStr),
+		Data:  append([]byte(nil), data[offset:offset+int(dataLen)]...),
+	}
+	offset += int(dataLen)
+	return entry, data[offset:], nil
+}
+
+// appendEntriesBinary writes entries in binary format to the WAL file.
+func appendEntriesBinary(f *os.File, entries []LogEntry) error {
+	for _, entry := range entries {
+		b := encodeEntryBinary(entry)
+		if _, err := f.Write(b); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// isBinaryWAL checks if the given data starts with the binary format marker.
+// JSON format always starts with '{'; binary starts with a non-ASCII version byte.
+func isBinaryWAL(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	return data[0] != '{'
+}
+
+// loadEntriesBinary reads all entries from binary WAL data.
+func loadEntriesBinary(data []byte) ([]LogEntry, error) {
+	var entries []LogEntry
+	remaining := data
+	for len(remaining) > 0 {
+		entry, rest, err := decodeEntryBinary(remaining)
+		if err != nil {
+			return entries, err
+		}
+		entries = append(entries, entry)
+		remaining = rest
+	}
+	return entries, nil
+}
+
+// loadEntriesJSON reads all entries from JSONL WAL data.
+func loadEntriesJSON(data []byte) ([]LogEntry, error) {
+	var entries []LogEntry
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 0, 1024*1024), 4*1024*1024)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		var entry LogEntry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			return nil, fmt.Errorf("decode wal entry: %w", err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries, scanner.Err()
+}
+
 func (s *Storage) AppendEntries(entries []LogEntry) error {
 	if len(entries) == 0 {
 		return nil
@@ -55,11 +158,8 @@ func (s *Storage) AppendEntries(entries []LogEntry) error {
 	}
 	defer f.Close()
 
-	enc := json.NewEncoder(f)
-	for _, entry := range entries {
-		if err := enc.Encode(entry); err != nil {
-			return err
-		}
+	if err := appendEntriesBinary(f, entries); err != nil {
+		return err
 	}
 
 	return f.Sync()
@@ -78,29 +178,18 @@ func (s *Storage) LoadEntries() ([]LogEntry, error) {
 	}
 	defer f.Close()
 
-	var entries []LogEntry
-	reader := bufio.NewReader(f)
-	for {
-		line, err := reader.ReadBytes('\n')
-		if len(line) > 0 {
-			line = bytes.TrimSpace(line)
-			if len(line) > 0 {
-				var entry LogEntry
-				if err := json.Unmarshal(line, &entry); err != nil {
-					return nil, fmt.Errorf("decode wal entry: %w", err)
-				}
-				entries = append(entries, entry)
-			}
-		}
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return nil, err
-		}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, nil
 	}
 
-	return entries, nil
+	if isBinaryWAL(data) {
+		return loadEntriesBinary(data)
+	}
+	return loadEntriesJSON(data)
 }
 
 func (s *Storage) RewriteEntries(entries []LogEntry) error {
@@ -117,13 +206,10 @@ func (s *Storage) RewriteEntries(entries []LogEntry) error {
 		return err
 	}
 
-	enc := json.NewEncoder(f)
-	for _, entry := range entries {
-		if err := enc.Encode(entry); err != nil {
-			_ = f.Close()
-			_ = os.Remove(tmpPath)
-			return err
-		}
+	if err := appendEntriesBinary(f, entries); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		return err
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()

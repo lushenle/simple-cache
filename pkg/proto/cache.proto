@@ -9,6 +9,7 @@ import "reset.proto";
 import "search.proto";
 import "expire_key.proto";
 import "dump.proto";
+import "batch_set.proto";
 
 import "google/api/annotations.proto";
 import "protoc-gen-openapiv2/options/annotations.proto";
@@ -120,6 +121,16 @@ service CacheService {
           description: "Dump all cache data to a local file for persistence."
           operation_id: "dump";
           tags: "persistence";
+      };
+  }
+
+  // BatchSet performs a streaming batch write. The client sends one or more
+  // BatchSetRequest messages over a single gRPC stream. The server processes
+  // them as batched entries and returns a single BatchSetResponse.
+  rpc BatchSet(stream BatchSetRequest) returns (BatchSetResponse) {
+      option (google.api.http) = {
+          post: "/v1/batch-set"
+          body: "*"
       };
   }
 

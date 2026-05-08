@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"io"
 	"sync"
 	"time"
 
@@ -411,6 +412,52 @@ func (s *CacheService) Load(ctx context.Context, req *pb.LoadRequest) (*pb.LoadR
 		Path:        result.Path,
 		DurationMs:  result.DurationMs,
 	}, nil
+}
+
+// BatchSet receives a stream of BatchSetRequest, processes them as individual
+// Set operations, and returns the count of successes and failures.
+func (s *CacheService) BatchSet(stream pb.CacheService_BatchSetServer) error {
+	var successCount, errorCount int32
+	var firstErr string
+	for {
+		req, err := stream.Recv()
+		if err == io.EOF {
+			return stream.SendAndClose(&pb.BatchSetResponse{
+				SuccessCount: successCount,
+				ErrorCount:   errorCount,
+				FirstError:   firstErr,
+			})
+		}
+		if err != nil {
+			return err
+		}
+		if !s.rl.Allow("") {
+			errorCount++
+			if firstErr == "" {
+				firstErr = "rate limit exceeded"
+			}
+			continue
+		}
+		cmd := &command.SetCommand{
+			Key:    req.Key,
+			Value:  req.Value,
+			Expire: req.Expire,
+		}
+		var errApply error
+		if s.node != nil {
+			_, errApply = s.node.Submit(cmd)
+		} else {
+			_, errApply = s.fsm.Apply(cmd)
+		}
+		if errApply != nil {
+			errorCount++
+			if firstErr == "" {
+				firstErr = errApply.Error()
+			}
+		} else {
+			successCount++
+		}
+	}
 }
 
 // NodeID returns the node ID for use in dump file naming.

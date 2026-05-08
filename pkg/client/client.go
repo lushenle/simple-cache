@@ -688,6 +688,37 @@ func ensureConnected(ctx context.Context, conn *grpc.ClientConn) error {
 		}
 	}
 }
+// BatchSetStream performs a streaming batch set of multiple key-value pairs.
+// It uses a gRPC stream which is more efficient than calling Set() in a loop,
+// especially over high-latency connections.
+func (c *Client) BatchSetStream(ctx context.Context, items map[string]string, ttl time.Duration) (int, int, error) {
+	if len(items) == 0 {
+		return 0, 0, nil
+	}
+	stream, err := c.client.BatchSet(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	formattedTTL := formatTTL(ttl)
+	for key, value := range items {
+		val, err := utils.ConvertToAnyPB(value)
+		if err != nil {
+			return 0, 0, err
+		}
+		if err := stream.Send(&pb.BatchSetRequest{
+			Key:    key,
+			Value:  val,
+			Expire: formattedTTL,
+		}); err != nil {
+			return 0, 0, err
+		}
+	}
+	resp, err := stream.CloseAndRecv()
+	if err != nil {
+		return 0, 0, err
+	}
+	return int(resp.SuccessCount), int(resp.ErrorCount), nil
+}
 
 // ---------------------------------------------------------------------------
 // Sentinel errors

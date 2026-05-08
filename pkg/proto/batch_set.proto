@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package pb;
+
+import "google/protobuf/any.proto";
+
+option go_package = "github.com/lushenle/simple-cache/pkg/pb";
+
+message BatchSetRequest {
+  string key = 1;
+  google.protobuf.Any value = 2;
+  string expire = 3;
+}
+
+message BatchSetResponse {
+  int32 success_count = 1;
+  int32 error_count = 2;
+  string first_error = 3;
+}

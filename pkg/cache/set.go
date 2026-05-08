@@ -64,7 +64,6 @@ func (c *Cache) Set(key string, value any, expire string) error {
 
 	success = true
 
-	c.updateSizeMetrics()
 	metrics.UpdateKeysTotal(len(c.items))
 
 	return nil

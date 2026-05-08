@@ -67,8 +67,9 @@ func NewWithLimits(cleanupInterval time.Duration, maxKeys, maxValueSize int, log
 	}
 
 	heap.Init(c.expirationHeap)
-	c.wg.Add(1)
+	c.wg.Add(2)
 	go c.cleanupWorker()
+	go c.sizeMetricsWorker()
 	return c
 }
 
@@ -95,4 +96,20 @@ type ErrMaxKeysReached struct {
 
 func (e ErrMaxKeysReached) Error() string {
 	return fmt.Sprintf("cache has reached max_keys limit of %d", e.MaxKeys)
+}
+
+// sizeMetricsWorker periodically estimates cache memory usage in the
+// background, avoiding the need to scan all items under a write lock.
+func (c *Cache) sizeMetricsWorker() {
+	defer c.wg.Done()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.stopChan:
+			return
+		case <-ticker.C:
+			c.updateSizeMetrics()
+		}
+	}
 }
