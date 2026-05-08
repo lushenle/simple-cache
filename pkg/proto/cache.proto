@@ -10,6 +10,7 @@ import "search.proto";
 import "expire_key.proto";
 import "dump.proto";
 import "batch_set.proto";
+import "watch.proto";
 
 import "google/api/annotations.proto";
 import "protoc-gen-openapiv2/options/annotations.proto";
@@ -131,6 +132,15 @@ service CacheService {
       option (google.api.http) = {
           post: "/v1/batch-set"
           body: "*"
+      };
+  }
+
+  // Watch subscribes to key change events. The server streams WatchEvent
+  // messages for Set, Del, and Expire operations on keys matching the
+  // requested pattern.
+  rpc Watch(WatchRequest) returns (stream WatchEvent) {
+      option (google.api.http) = {
+          get: "/v1/watch"
       };
   }
 

@@ -48,6 +48,11 @@ func (c *Cache) Set(key string, value any, expire string) error {
 		c.delInternal(key)
 	}
 
+	// LRU eviction: when at capacity and key is new, evict oldest.
+	if c.maxKeys > 0 && c.evictionPolicy == EvictionLRU && len(c.items) >= c.maxKeys {
+		c.evictLRU()
+	}
+
 	if !expiration.IsZero() {
 		heap.Push(c.expirationHeap, &expirationEntry{
 			key:        key,
@@ -64,6 +69,7 @@ func (c *Cache) Set(key string, value any, expire string) error {
 
 	success = true
 
+	c.setLRU(key)
 	metrics.UpdateKeysTotal(len(c.items))
 
 	return nil

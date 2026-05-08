@@ -158,32 +158,40 @@ Implementation plan:
 
 ## Phase 4: Advanced Features (backlog)
 
-### 4.1 Key Eviction Policies
+### 4.1 LRU Eviction Policy ✅ (Implemented)
 
-**Problem**: Only TTL-based eviction. No LRU/LFU for memory management.
+**Problem**: When `max_keys` is reached, `Set()` returns an error. No automatic eviction.
 
-**Solution**: Add configurable eviction policy:
-- `ttl-only` (current) — never evict until TTL expires
-- `lru` — evict least recently used when at max_keys
-- `lfu` — evict least frequently used when at max_keys
+**Solution**:
+- Config: `eviction_policy: "none"` (default, error when full) or `"lru"` (auto-evict least recently used)
+- Uses `container/list` doubly-linked list to track access order
+- On Get: move key to front of list
+- On Set (new key): if at max_keys and LRU, evict back of list before inserting
+- On Del: remove from LRU list
+- Metrics: `cache_evictions_total` counter
 
-**Files**: `pkg/cache/eviction.go`, `pkg/cache/cache.go`
+**Files**: `pkg/cache/cache.go`, `pkg/cache/get.go`, `pkg/cache/set.go`, `pkg/cache/del.go`, `pkg/cache/reset.go`, `pkg/cache/metrics.go`, `pkg/config/config.go`, `pkg/cmd/main.go`
 
-### 4.2 Namespacing / Multi-Tenancy
+### 4.2 Watch / Subscribe (Proto + Server Stub ✅)
+
+**Problem**: No way for clients to subscribe to cache changes.
+
+**Solution**:
+- gRPC server-streaming RPC: `rpc Watch(WatchRequest) returns (stream WatchEvent)`
+- Server pub/sub: `WatchService` registers subscribers, publishes on Set/Del/Expire
+- Client subscribes with pattern filter, receives events asynchronously
+- Proto at `pkg/proto/watch.proto` (regenerate with `make proto`)
+
+**Files**: `pkg/proto/watch.proto`, `pkg/proto/cache.proto`, `pkg/server/watch.go`, `pkg/client/client.go`
+
+### 4.3 Namespacing / Multi-Tenancy (Future)
 
 Allow multiple logical caches within a single cluster, isolated by key prefix:
 - `namespace` config per application
 - Metrics broken down by namespace
 - Auth token per namespace
 
-### 4.3 Watch / Subscribe
-
-Clients can subscribe to key changes:
-- gRPC server-streaming RPC: `rpc Watch(WatchRequest) returns (stream WatchEvent)`
-- Server publishes events on Set/Del/Expire
-- Useful for cache invalidation, event-driven architectures
-
-### 4.4 CLI Tool
+### 4.4 CLI Tool (Future)
 
 A command-line tool similar to Redis CLI:
 ```

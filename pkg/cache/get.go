@@ -30,6 +30,7 @@ func (c *Cache) Get(key string) (any, bool) {
 	}
 	defer c.mu.RUnlock()
 
+	c.access(key)
 	success = true
 	return item.value, success
 }

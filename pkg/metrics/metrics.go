@@ -217,6 +217,7 @@ func Init() {
 			RequestDuration,
 			KeysTotal,
 			ExpirationHeapSize,
+				EvictionsTotal,
 			OperationDuration,
 			OperationCount,
 			CacheSize,
@@ -316,6 +317,8 @@ func ObservePersistenceDuration(op string, d float64) {
 	PersistenceDuration.WithLabelValues(op).Observe(d)
 }
 func SetDumpKeys(n int64) { DumpKeysGauge.Set(float64(n)) }
+func IncEvictions() { EvictionsTotal.Inc() }
+
 func SetLoadKeys(loaded, skipped int64) {
 	LoadKeysGauge.WithLabelValues("loaded").Set(float64(loaded))
 	LoadKeysGauge.WithLabelValues("skipped").Set(float64(skipped))

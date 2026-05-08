@@ -81,7 +81,7 @@ func main() {
 	}()
 
 	// Create a new gRPC server
-	c := cache.NewWithLimits(30*time.Second, cfg.MaxKeys, cfg.MaxValueSize, logger)
+	c := cache.NewWithLimits(30*time.Second, cfg.MaxKeys, cfg.MaxValueSize, cfg.EvictionPolicy, logger)
 	srv := server.New(c, cfg.NodeID)
 
 	// Auto-load from dump file on startup. Distributed mode relies on WAL replay instead.

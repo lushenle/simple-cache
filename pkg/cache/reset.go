@@ -13,6 +13,7 @@ func (c *Cache) Reset() int {
 	c.mu.Lock(metrics.LockWrite)
 	defer c.mu.Unlock()
 	count := len(c.items)
+	c.resetLRU()
 	c.items = make(map[string]*Item)
 	c.prefixTree = radix.New()
 	c.expirationHeap = &ExpirationHeap{onSwap: c.expirationHeap.onSwap}

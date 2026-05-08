@@ -2,6 +2,7 @@ package cache
 
 import (
 	"container/heap"
+	"container/list"
 	"fmt"
 	"sync"
 	"time"
@@ -9,6 +10,14 @@ import (
 	"github.com/armon/go-radix"
 	"github.com/lushenle/simple-cache/pkg/metrics"
 	"go.uber.org/zap"
+)
+
+// EvictionPolicy controls how the cache behaves when it reaches max_keys.
+type EvictionPolicy string
+
+const (
+	EvictionNone EvictionPolicy = "none"  // return ErrMaxKeysReached when full
+	EvictionLRU  EvictionPolicy = "lru"   // evict least recently used when full
 )
 
 type Item struct {
@@ -27,17 +36,21 @@ type Cache struct {
 	cleanupInterval time.Duration
 	wg              sync.WaitGroup
 
-	maxKeys      int // max cache keys (0 = unlimited)
-	maxValueSize int // max value size in bytes (0 = unlimited)
+	maxKeys         int // max cache keys (0 = unlimited)
+	maxValueSize    int // max value size in bytes (0 = unlimited)
+	evictionPolicy  EvictionPolicy
+	lruMu           sync.Mutex
+	lruList         *list.List           // front = most recent, back = evict candidate
+	lruElements     map[string]*list.Element // key -> list element
 
 	logger *zap.Logger
 }
 
 func New(cleanupInterval time.Duration, logger *zap.Logger) *Cache {
-	return NewWithLimits(cleanupInterval, 0, 0, logger)
+	return NewWithLimits(cleanupInterval, 0, 0, string(EvictionNone), logger)
 }
 
-func NewWithLimits(cleanupInterval time.Duration, maxKeys, maxValueSize int, logger *zap.Logger) *Cache {
+func NewWithLimits(cleanupInterval time.Duration, maxKeys, maxValueSize int, evictionPolicy string, logger *zap.Logger) *Cache {
 	if cleanupInterval <= 0 {
 		cleanupInterval = time.Minute // Default cleanup interval
 	}
@@ -46,6 +59,13 @@ func NewWithLimits(cleanupInterval time.Duration, maxKeys, maxValueSize int, log
 	}
 	if maxValueSize < 0 {
 		maxValueSize = 0
+	}
+
+	ep := EvictionPolicy(evictionPolicy)
+	switch ep {
+	case EvictionNone, EvictionLRU:
+	default:
+		ep = EvictionNone
 	}
 
 	c := &Cache{
@@ -58,7 +78,12 @@ func NewWithLimits(cleanupInterval time.Duration, maxKeys, maxValueSize int, log
 		cleanupInterval: cleanupInterval,
 		maxKeys:         maxKeys,
 		maxValueSize:    maxValueSize,
+		evictionPolicy:  ep,
+		lruElements:     make(map[string]*list.Element),
 		logger:          logger,
+	}
+	if ep == EvictionLRU {
+		c.lruList = list.New()
 	}
 
 	// Set up index tracking callback so expirationIndex stays in sync with heap swaps
@@ -96,6 +121,75 @@ type ErrMaxKeysReached struct {
 
 func (e ErrMaxKeysReached) Error() string {
 	return fmt.Sprintf("cache has reached max_keys limit of %d", e.MaxKeys)
+}
+
+// access marks a key as recently used.  In LRU mode it moves the key to the
+// front of the eviction list.  The caller must hold at least a read lock.
+func (c *Cache) access(key string) {
+	c.lruMu.Lock()
+	defer c.lruMu.Unlock()
+	if c.lruList == nil || c.lruElements == nil {
+		return
+	}
+	if elem, ok := c.lruElements[key]; ok {
+		c.lruList.MoveToFront(elem)
+	}
+}
+
+// evictLRU removes the least recently used key from the cache.
+// The caller must hold the write lock. Returns true if a key was evicted.
+func (c *Cache) evictLRU() bool {
+	c.lruMu.Lock()
+	if c.lruList == nil || c.lruList.Len() == 0 {
+		c.lruMu.Unlock()
+		return false
+	}
+	elem := c.lruList.Back()
+	if elem == nil {
+		c.lruMu.Unlock()
+		return false
+	}
+	key := elem.Value.(string)
+	c.lruMu.Unlock()
+	c.delInternal(key)
+	metrics.IncEvictions()
+	return true
+}
+
+func (c *Cache) delLRU(key string) {
+	c.lruMu.Lock()
+	defer c.lruMu.Unlock()
+	if c.lruElements != nil {
+		if elem, ok := c.lruElements[key]; ok {
+			c.lruList.Remove(elem)
+			delete(c.lruElements, key)
+		}
+	}
+}
+
+func (c *Cache) resetLRU() {
+	c.lruMu.Lock()
+	defer c.lruMu.Unlock()
+	if c.lruList != nil {
+		c.lruList.Init()
+	}
+	if c.lruElements != nil {
+		c.lruElements = make(map[string]*list.Element)
+	}
+}
+
+func (c *Cache) setLRU(key string) {
+	c.lruMu.Lock()
+	defer c.lruMu.Unlock()
+	if c.lruList == nil {
+		return
+	}
+	if elem, ok := c.lruElements[key]; ok {
+		c.lruList.MoveToFront(elem)
+		return
+	}
+	elem := c.lruList.PushFront(key)
+	c.lruElements[key] = elem
 }
 
 // sizeMetricsWorker periodically estimates cache memory usage in the
