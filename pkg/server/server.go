@@ -91,6 +91,7 @@ type CacheService struct {
 	grpcAddr string                 // this node's gRPC address
 	peerMap  map[string]string      // nodeID → gRPC address for all known peers
 	rl       *simpleRateLimiter
+	watchSvc *WatchService
 }
 
 // New creates a CacheService in single-node mode.
@@ -105,6 +106,11 @@ func New(c *cache.Cache, nodeID string) *CacheService {
 // SetRateLimiter enables rate limiting on the service.
 func (s *CacheService) SetRateLimiter(maxQPS int) {
 	s.rl = newSimpleRateLimiter(maxQPS)
+}
+
+// SetWatchService enables key change event publishing.
+func (s *CacheService) SetWatchService(ws *WatchService) {
+	s.watchSvc = ws
 }
 
 // SetGRPCAddr sets this node's gRPC address (used if NewWithCluster was not called).
@@ -291,6 +297,9 @@ func (s *CacheService) Set(ctx context.Context, req *pb.SetRequest) (*pb.SetResp
 	if err != nil {
 		return nil, err
 	}
+	if s.watchSvc != nil {
+		s.watchSvc.PublishSet(ctx, req.Key, req.Value)
+	}
 	return resp.(*pb.SetResponse), nil
 }
 
@@ -310,6 +319,9 @@ func (s *CacheService) Del(ctx context.Context, req *pb.DelRequest) (*pb.DelResp
 	if err != nil {
 		return nil, err
 	}
+	if s.watchSvc != nil && resp.(*pb.DelResponse).Existed {
+		s.watchSvc.PublishDel(req.Key)
+	}
 	return resp.(*pb.DelResponse), nil
 }
 
@@ -328,6 +340,9 @@ func (s *CacheService) ExpireKey(ctx context.Context, req *pb.ExpireKeyRequest) 
 	}
 	if err != nil {
 		return nil, err
+	}
+	if s.watchSvc != nil && resp.(*pb.ExpireKeyResponse).Existed {
+		s.watchSvc.PublishExpire(req.Key)
 	}
 	return resp.(*pb.ExpireKeyResponse), nil
 }

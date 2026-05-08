@@ -719,6 +719,32 @@ func (c *Client) BatchSetStream(ctx context.Context, items map[string]string, tt
 	}
 	return int(resp.SuccessCount), int(resp.ErrorCount), nil
 }
+// Watch subscribes to cache change events matching the given pattern.
+// Events are sent on the returned channel until the context is cancelled
+// or the connection is closed. The caller must consume from the channel
+// to prevent backpressure.
+func (c *Client) Watch(ctx context.Context, pattern string) (<-chan *pb.WatchEvent, error) {
+	stream, err := c.client.Watch(ctx, &pb.WatchRequest{Pattern: pattern})
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan *pb.WatchEvent, 64)
+	go func() {
+		defer close(ch)
+		for {
+			evt, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			select {
+			case ch <- evt:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch, nil
+}
 
 // ---------------------------------------------------------------------------
 // Sentinel errors
