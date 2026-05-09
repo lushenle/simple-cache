@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"sync"
+	"time"
 
 	"github.com/lushenle/simple-cache/pkg/cache"
 	"github.com/lushenle/simple-cache/pkg/command"
@@ -33,6 +35,52 @@ type GetLeaderResponse struct {
 	IsLeader       bool
 }
 
+// simpleRateLimiter implements a token-bucket rate limiter per client.
+type simpleRateLimiter struct {
+	mu       sync.Mutex
+	tokens   map[string]struct {
+		count    int
+		expireAt time.Time
+	}
+	maxQPS  int
+}
+
+func newSimpleRateLimiter(maxQPS int) *simpleRateLimiter {
+	if maxQPS <= 0 {
+		return nil
+	}
+	return &simpleRateLimiter{
+		tokens:  make(map[string]struct {
+			count    int
+			expireAt time.Time
+		}),
+		maxQPS: maxQPS,
+	}
+}
+
+func (rl *simpleRateLimiter) Allow(key string) bool {
+	if rl == nil {
+		return true
+	}
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	now := time.Now()
+	entry, ok := rl.tokens[key]
+	if !ok || now.After(entry.expireAt) {
+		rl.tokens[key] = struct {
+			count    int
+			expireAt time.Time
+		}{count: 1, expireAt: now.Add(time.Second)}
+		return true
+	}
+	if entry.count >= rl.maxQPS {
+		return false
+	}
+	entry.count++
+	rl.tokens[key] = entry
+	return true
+}
+
 // CacheService implements the cache RPCs and cluster management.
 type CacheService struct {
 	pb.UnimplementedCacheServiceServer
@@ -41,6 +89,7 @@ type CacheService struct {
 	nodeID   string
 	grpcAddr string                 // this node's gRPC address
 	peerMap  map[string]string      // nodeID → gRPC address for all known peers
+	rl       *simpleRateLimiter
 }
 
 // New creates a CacheService in single-node mode.
@@ -52,16 +101,9 @@ func New(c *cache.Cache, nodeID string) *CacheService {
 	}
 }
 
-// NewWithCluster creates a CacheService with cluster-awareness.
-// grpcAddr is this node's own gRPC address.
-// peerMap maps nodeID to gRPC address for every node in the cluster.
-func NewWithCluster(c *cache.Cache, nodeID, grpcAddr string, peerMap map[string]string) *CacheService {
-	return &CacheService{
-		fsm:      fsm.New(c),
-		nodeID:   nodeID,
-		grpcAddr: grpcAddr,
-		peerMap:  peerMap,
-	}
+// SetRateLimiter enables rate limiting on the service.
+func (s *CacheService) SetRateLimiter(maxQPS int) {
+	s.rl = newSimpleRateLimiter(maxQPS)
 }
 
 // SetGRPCAddr sets this node's gRPC address (used if NewWithCluster was not called).
@@ -123,6 +165,14 @@ func (s *CacheService) GetLeader(ctx context.Context) (*GetLeaderResponse, error
 	}, nil
 }
 
+// StepDown forces the current leader to step down.
+func (s *CacheService) StepDown(ctx context.Context) error {
+	if s.node == nil {
+		return nil // single mode, no-op
+	}
+	return s.node.StepDown()
+}
+
 // HealthStatus returns the node's health.
 func (s *CacheService) HealthStatus() ProbeStatus {
 	status := ProbeStatus{
@@ -136,7 +186,6 @@ func (s *CacheService) HealthStatus() ProbeStatus {
 		status.Mode = common.ModeDistributed
 		status.LeaderID = s.node.LeaderID()
 		status.Details = s.node.Status()
-		// Phase 2: populate the leader's gRPC address for client fast redirect.
 		status.LeaderGRPCAddr = s.peerMap[status.LeaderID]
 		if status.LeaderGRPCAddr == "" && s.Role() == "leader" {
 			status.LeaderGRPCAddr = s.grpcAddr
@@ -188,21 +237,44 @@ func (s *CacheService) Peers() []string {
 	return s.node.Peers()
 }
 
-func (s *CacheService) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
-	if s.node != nil && s.node.Role() != raft.Leader {
-		return nil, status.Error(codes.FailedPrecondition, "not leader")
+// checkLeaderRead returns nil if the node can safely serve reads.
+// In distributed mode, it checks both role and leader lease.
+func (s *CacheService) checkLeaderRead() error {
+	if s.node == nil {
+		return nil // single mode
 	}
+	if s.node.Role() != raft.Leader {
+		return status.Error(codes.FailedPrecondition, "not leader")
+	}
+	if !s.node.LeaderLeaseOK() {
+		return status.Error(codes.FailedPrecondition, "leader lease expired")
+	}
+	return nil
+}
+
+func (s *CacheService) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
+	if err := s.checkLeaderRead(); err != nil {
+		return nil, err
+	}
+	if !s.rl.Allow("") {
+		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
+	}
+
 	value, found := s.fsm.Cache.Get(req.Key)
 
-	val, err := utils.ConvertToAnyPB(value)
-	if err != nil {
-		return &pb.GetResponse{Value: nil, Found: false}, status.Error(codes.InvalidArgument, err.Error())
+	val, convErr := utils.ConvertToAnyPB(value)
+	if convErr != nil {
+		return &pb.GetResponse{Value: nil, Found: false}, status.Error(codes.InvalidArgument, convErr.Error())
 	}
 
 	return &pb.GetResponse{Value: val, Found: found}, nil
 }
 
 func (s *CacheService) Set(ctx context.Context, req *pb.SetRequest) (*pb.SetResponse, error) {
+	if !s.rl.Allow("") {
+		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
+	}
+
 	cmd := &command.SetCommand{
 		Key:    req.Key,
 		Value:  req.Value,
@@ -222,6 +294,10 @@ func (s *CacheService) Set(ctx context.Context, req *pb.SetRequest) (*pb.SetResp
 }
 
 func (s *CacheService) Del(ctx context.Context, req *pb.DelRequest) (*pb.DelResponse, error) {
+	if !s.rl.Allow("") {
+		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
+	}
+
 	cmd := &command.DelCommand{Key: req.Key}
 	var resp interface{}
 	var err error
@@ -237,6 +313,10 @@ func (s *CacheService) Del(ctx context.Context, req *pb.DelRequest) (*pb.DelResp
 }
 
 func (s *CacheService) ExpireKey(ctx context.Context, req *pb.ExpireKeyRequest) (*pb.ExpireKeyResponse, error) {
+	if !s.rl.Allow("") {
+		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
+	}
+
 	cmd := &command.ExpireKeyCommand{Key: req.Key, Expire: req.Expire}
 	var resp interface{}
 	var err error
@@ -252,6 +332,10 @@ func (s *CacheService) ExpireKey(ctx context.Context, req *pb.ExpireKeyRequest) 
 }
 
 func (s *CacheService) Reset(ctx context.Context, req *pb.ResetRequest) (*pb.ResetResponse, error) {
+	if !s.rl.Allow("") {
+		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
+	}
+
 	cmd := &command.ResetCommand{}
 	var resp interface{}
 	var err error
@@ -267,8 +351,11 @@ func (s *CacheService) Reset(ctx context.Context, req *pb.ResetRequest) (*pb.Res
 }
 
 func (s *CacheService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.SearchResponse, error) {
-	if s.node != nil && s.node.Role() != raft.Leader {
-		return nil, status.Error(codes.FailedPrecondition, "not leader")
+	if err := s.checkLeaderRead(); err != nil {
+		return nil, err
+	}
+	if !s.rl.Allow("") {
+		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
 	}
 
 	cmd := &command.SearchCommand{
@@ -330,4 +417,3 @@ func (s *CacheService) Load(ctx context.Context, req *pb.LoadRequest) (*pb.LoadR
 func (s *CacheService) NodeID() string {
 	return s.nodeID
 }
-

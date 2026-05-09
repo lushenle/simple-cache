@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -42,6 +43,12 @@ func main() {
 
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", promhttp.Handler())
+	// pprof endpoints for runtime profiling (on metrics port, separate from data plane)
+	metricsMux.HandleFunc("/debug/pprof/", pprof.Index)
+	metricsMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	metricsMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	metricsMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	metricsMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
 	plugin := log.NewStdoutPlugin(zapcore.InfoLevel)
 	logger := log.NewLogger(plugin)
@@ -53,6 +60,10 @@ func main() {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		logger.Fatal("failed to load config", zap.Error(err), zap.String("path", cfgPath))
+	}
+	cfg.OverrideFromEnv()
+	if err := cfg.Validate(); err != nil {
+		logger.Fatal("invalid configuration", zap.Error(err))
 	}
 	acfg := config.NewAtomic(cfg)
 	stop := make(chan struct{})
@@ -70,7 +81,7 @@ func main() {
 	}()
 
 	// Create a new gRPC server
-	c := cache.New(30*time.Second, logger)
+	c := cache.NewWithLimits(30*time.Second, cfg.MaxKeys, cfg.MaxValueSize, logger)
 	srv := server.New(c, cfg.NodeID)
 
 	// Auto-load from dump file on startup. Distributed mode relies on WAL replay instead.
@@ -110,6 +121,9 @@ func main() {
 			logger.Fatal("failed to create raft node", zap.Error(err))
 		}
 		srv.UseRaft(raftNode)
+	}
+	if cfg.MaxQPS > 0 {
+		srv.SetRateLimiter(cfg.MaxQPS)
 	}
 
 	// Phase 2: configure cluster metadata for leader discovery.
@@ -326,6 +340,24 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write(out)
+	})
+	mux.HandleFunc("/cluster/stepdown", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := svr.StepDown(r.Context()); err != nil {
+			status := http.StatusInternalServerError
+			body := err.Error()
+			switch err.(type) {
+			case raft.ErrNotLeader:
+				status = http.StatusPreconditionFailed
+			}
+			http.Error(w, body, status)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("stepped down"))
 	})
 
 	// Access the embedded 'swagger' folder.

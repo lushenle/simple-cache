@@ -46,6 +46,7 @@ type Node struct {
 	lastApply     uint64
 	lastLogIndex  uint64
 	lastLogTerm   uint64
+	leaseUntil    int64 // Leader lease expiry (UnixNano), 0 when not leader
 	snapshotIndex uint64
 	snapshotTerm  uint64
 
@@ -868,6 +869,7 @@ func (n *Node) advanceCommitLocked() bool {
 			n.commitIdx = idx
 			metrics.SetRaftCommitIndex(n.commitIdx)
 			_ = n.storage.SaveMeta(n.metaLocked())
+				n.leaseUntil = time.Now().Add(n.el).UnixNano()
 			return true
 		}
 	}
@@ -1058,6 +1060,41 @@ func (n *Node) stepDownLocked(term uint64) {
 		close(w)
 		delete(n.applyWaiter, idx)
 	}
+}
+
+// LeaderLeaseOK returns true if the node is the leader and its lease
+// has not expired. This provides linearizable reads: as long as the
+// leader has replicated to a majority within the election timeout, it
+// can safely serve reads without contacting followers.
+func (n *Node) LeaderLeaseOK() bool {
+	return n.Role() == Leader && atomic.LoadInt64(&n.leaseUntil) > time.Now().UnixNano()
+}
+
+// StepDown forces the current leader to step down, incrementing the term
+// so that a new leader election is triggered. Returns an error if the
+// node is not the leader.
+func (n *Node) StepDown() error {
+	if n.Role() != Leader {
+		return ErrNotLeader{Leader: n.leaderID.Load().(string)}
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.Role() != Leader {
+		return ErrNotLeader{Leader: n.leaderID.Load().(string)}
+	}
+	n.term++
+	n.votedFor = ""
+	n.role.Store(Follower)
+	n.leaderID.Store("")
+	n.leaseUntil = 0
+	metrics.SetRaftRole(n.id, string(Follower))
+	for idx, w := range n.applyWaiter {
+		w <- applyResult{resp: nil, err: ErrNotLeader{Leader: ""}}
+		close(w)
+		delete(n.applyWaiter, idx)
+	}
+	_ = n.storage.SaveMeta(n.metaLocked())
+	return nil
 }
 
 type ErrNotLeader struct{ Leader string }
