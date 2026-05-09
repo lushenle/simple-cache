@@ -104,10 +104,12 @@ sequenceDiagram
 - 共识层：`pkg/raft` (Raft 选举、日志复制、snapshot/compaction、InstallSnapshot，含 `peer.go` 地址规范化)
 - 缓存引擎：`pkg/cache` (CRUD、TTL 过期、前缀/正则搜索、single 模式 Dump/Load 持久化)
 - 基础设施层：`pkg/config` (配置管理)、`pkg/log` (日志)、`pkg/metrics` (指标)、`pkg/utils` (工具)
-- 客户端：`pkg/client` (gRPC 客户端 SDK，含自动 Leader 切主)、`pkg/client/resolver` (gRPC Name Resolver)
+- 客户端：`pkg/client` (gRPC 客户端 SDK，含自动 Leader 切主、Watch/Subscribe、流式 BatchSet)、`pkg/client/resolver` (gRPC Name Resolver)
+- 推送服务：`pkg/server/watch.go` (WatchService pub/sub 键变更推送)
 
 ## 现状评估
 - 读写分离通过 `InstrumentedRWMutex` 与过期清理协程实现
 - 搜索支持前缀与正则，利用 Radix 前缀树提升效率
+- 支持 LRU 淘汰策略，达到 max_keys 时自动淘汰最近最少使用的 key
 - 持久化支持二进制和 JSON 双格式，原子写入保证数据安全；Raft 侧额外支持 snapshot 与 WAL compaction
 - 优雅关闭 8 步流程：gRPC → Gateway → Raft → Dump → Cache → Config → Metrics → Logger

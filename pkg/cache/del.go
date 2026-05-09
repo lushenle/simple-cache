@@ -21,6 +21,7 @@ func (c *Cache) Del(key string) bool {
 
 	_, existed := c.items[key]
 	if existed {
+		c.delLRU(key)
 		c.delInternal(key)
 		metrics.IncOperation(metrics.OpDel, true)
 	} else {

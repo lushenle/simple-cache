@@ -81,7 +81,7 @@ func main() {
 	}()
 
 	// Create a new gRPC server
-	c := cache.NewWithLimits(30*time.Second, cfg.MaxKeys, cfg.MaxValueSize, logger)
+	c := cache.NewWithLimits(30*time.Second, cfg.MaxKeys, cfg.MaxValueSize, cfg.EvictionPolicy, logger)
 	srv := server.New(c, cfg.NodeID)
 
 	// Auto-load from dump file on startup. Distributed mode relies on WAL replay instead.
@@ -125,6 +125,10 @@ func main() {
 	if cfg.MaxQPS > 0 {
 		srv.SetRateLimiter(cfg.MaxQPS)
 	}
+
+	// Set up watch service for key change notifications.
+	watchSvc := server.NewWatchService()
+	srv.SetWatchService(watchSvc)
 
 	// Phase 2: configure cluster metadata for leader discovery.
 	srv.SetGRPCAddr(cfg.GRPCAddr)
@@ -203,13 +207,16 @@ func main() {
 		}
 	}
 
-	// 6. Close cache
+	// 6. Close watch service
+	watchSvc.Close()
+
+	// 7. Close cache
 	c.Close()
 
-	// 7. Stop config watcher
+	// 8. Stop config watcher
 	close(stop)
 
-	// 8. Stop metrics server
+	// 9. Stop metrics server
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	if err := metricsServer.Shutdown(shutdownCtx); err != nil {

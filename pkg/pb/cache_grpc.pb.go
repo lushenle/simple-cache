@@ -26,6 +26,8 @@ const (
 	CacheService_Search_FullMethodName    = "/pb.CacheService/Search"
 	CacheService_ExpireKey_FullMethodName = "/pb.CacheService/ExpireKey"
 	CacheService_Dump_FullMethodName      = "/pb.CacheService/Dump"
+	CacheService_BatchSet_FullMethodName  = "/pb.CacheService/BatchSet"
+	CacheService_Watch_FullMethodName     = "/pb.CacheService/Watch"
 	CacheService_Load_FullMethodName      = "/pb.CacheService/Load"
 )
 
@@ -42,6 +44,14 @@ type CacheServiceClient interface {
 	Search(ctx context.Context, in *SearchRequest, opts ...grpc.CallOption) (*SearchResponse, error)
 	ExpireKey(ctx context.Context, in *ExpireKeyRequest, opts ...grpc.CallOption) (*ExpireKeyResponse, error)
 	Dump(ctx context.Context, in *DumpRequest, opts ...grpc.CallOption) (*DumpResponse, error)
+	// BatchSet performs a streaming batch write. The client sends one or more
+	// BatchSetRequest messages over a single gRPC stream. The server processes
+	// them as batched entries and returns a single BatchSetResponse.
+	BatchSet(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[BatchSetRequest, BatchSetResponse], error)
+	// Watch subscribes to key change events. The server streams WatchEvent
+	// messages for Set, Del, and Expire operations on keys matching the
+	// requested pattern.
+	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchEvent], error)
 	Load(ctx context.Context, in *LoadRequest, opts ...grpc.CallOption) (*LoadResponse, error)
 }
 
@@ -123,6 +133,38 @@ func (c *cacheServiceClient) Dump(ctx context.Context, in *DumpRequest, opts ...
 	return out, nil
 }
 
+func (c *cacheServiceClient) BatchSet(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[BatchSetRequest, BatchSetResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &CacheService_ServiceDesc.Streams[0], CacheService_BatchSet_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[BatchSetRequest, BatchSetResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CacheService_BatchSetClient = grpc.ClientStreamingClient[BatchSetRequest, BatchSetResponse]
+
+func (c *cacheServiceClient) Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &CacheService_ServiceDesc.Streams[1], CacheService_Watch_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchRequest, WatchEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CacheService_WatchClient = grpc.ServerStreamingClient[WatchEvent]
+
 func (c *cacheServiceClient) Load(ctx context.Context, in *LoadRequest, opts ...grpc.CallOption) (*LoadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(LoadResponse)
@@ -146,6 +188,14 @@ type CacheServiceServer interface {
 	Search(context.Context, *SearchRequest) (*SearchResponse, error)
 	ExpireKey(context.Context, *ExpireKeyRequest) (*ExpireKeyResponse, error)
 	Dump(context.Context, *DumpRequest) (*DumpResponse, error)
+	// BatchSet performs a streaming batch write. The client sends one or more
+	// BatchSetRequest messages over a single gRPC stream. The server processes
+	// them as batched entries and returns a single BatchSetResponse.
+	BatchSet(grpc.ClientStreamingServer[BatchSetRequest, BatchSetResponse]) error
+	// Watch subscribes to key change events. The server streams WatchEvent
+	// messages for Set, Del, and Expire operations on keys matching the
+	// requested pattern.
+	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchEvent]) error
 	Load(context.Context, *LoadRequest) (*LoadResponse, error)
 	mustEmbedUnimplementedCacheServiceServer()
 }
@@ -177,6 +227,12 @@ func (UnimplementedCacheServiceServer) ExpireKey(context.Context, *ExpireKeyRequ
 }
 func (UnimplementedCacheServiceServer) Dump(context.Context, *DumpRequest) (*DumpResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Dump not implemented")
+}
+func (UnimplementedCacheServiceServer) BatchSet(grpc.ClientStreamingServer[BatchSetRequest, BatchSetResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method BatchSet not implemented")
+}
+func (UnimplementedCacheServiceServer) Watch(*WatchRequest, grpc.ServerStreamingServer[WatchEvent]) error {
+	return status.Errorf(codes.Unimplemented, "method Watch not implemented")
 }
 func (UnimplementedCacheServiceServer) Load(context.Context, *LoadRequest) (*LoadResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Load not implemented")
@@ -328,6 +384,24 @@ func _CacheService_Dump_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CacheService_BatchSet_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(CacheServiceServer).BatchSet(&grpc.GenericServerStream[BatchSetRequest, BatchSetResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CacheService_BatchSetServer = grpc.ClientStreamingServer[BatchSetRequest, BatchSetResponse]
+
+func _CacheService_Watch_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(CacheServiceServer).Watch(m, &grpc.GenericServerStream[WatchRequest, WatchEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CacheService_WatchServer = grpc.ServerStreamingServer[WatchEvent]
+
 func _CacheService_Load_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(LoadRequest)
 	if err := dec(in); err != nil {
@@ -386,6 +460,17 @@ var CacheService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _CacheService_Load_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "BatchSet",
+			Handler:       _CacheService_BatchSet_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "Watch",
+			Handler:       _CacheService_Watch_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "cache.proto",
 }

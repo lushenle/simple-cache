@@ -45,6 +45,40 @@
         ]
       }
     },
+    "/v1/batch-set": {
+      "post": {
+        "summary": "BatchSet performs a streaming batch write. The client sends one or more\nBatchSetRequest messages over a single gRPC stream. The server processes\nthem as batched entries and returns a single BatchSetResponse.",
+        "operationId": "CacheService_BatchSet",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/pbBatchSetResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "description": " (streaming inputs)",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/pbBatchSetRequest"
+            }
+          }
+        ],
+        "tags": [
+          "CacheService"
+        ]
+      }
+    },
     "/v1/dump": {
       "post": {
         "summary": "Dump cache data to file.",
@@ -244,6 +278,47 @@
         ]
       }
     },
+    "/v1/watch": {
+      "get": {
+        "summary": "Watch subscribes to key change events. The server streams WatchEvent\nmessages for Set, Del, and Expire operations on keys matching the\nrequested pattern.",
+        "operationId": "CacheService_Watch",
+        "responses": {
+          "200": {
+            "description": "A successful response.(streaming responses)",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "result": {
+                  "$ref": "#/definitions/pbWatchEvent"
+                },
+                "error": {
+                  "$ref": "#/definitions/rpcStatus"
+                }
+              },
+              "title": "Stream result of pbWatchEvent"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "pattern",
+            "description": "Pattern filters which keys to watch. Empty string watches all keys.\nSupports wildcard patterns like \"user:*\".",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "CacheService"
+        ]
+      }
+    },
     "/v1/{key}": {
       "get": {
         "summary": "Get a value by key.",
@@ -407,6 +482,36 @@
       ],
       "default": "WILDCARD"
     },
+    "pbBatchSetRequest": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/definitions/protobufAny"
+        },
+        "expire": {
+          "type": "string"
+        }
+      }
+    },
+    "pbBatchSetResponse": {
+      "type": "object",
+      "properties": {
+        "successCount": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "errorCount": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "firstError": {
+          "type": "string"
+        }
+      }
+    },
     "pbDelResponse": {
       "type": "object",
       "properties": {
@@ -545,6 +650,32 @@
           "type": "boolean"
         }
       }
+    },
+    "pbWatchEvent": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "$ref": "#/definitions/pbWatchEventType"
+        },
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/definitions/protobufAny",
+          "title": "only set for EVENT_SET; nil for DEL/EXPIRE"
+        }
+      },
+      "description": "WatchEvent is sent to the client when a matching key changes."
+    },
+    "pbWatchEventType": {
+      "type": "string",
+      "enum": [
+        "EVENT_SET",
+        "EVENT_DEL",
+        "EVENT_EXPIRE"
+      ],
+      "default": "EVENT_SET",
+      "description": "WatchEventType indicates the type of change."
     },
     "protobufAny": {
       "type": "object",

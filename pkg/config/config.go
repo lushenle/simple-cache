@@ -38,6 +38,7 @@ type Config struct {
 	MaxKeys           int               `yaml:"max_keys"`            // max cache keys (0 = unlimited)
 	MaxValueSize      int               `yaml:"max_value_size"`      // max value size in bytes (0 = unlimited)
 	MaxQPS            int               `yaml:"max_qps"`             // max requests/sec per client (0 = unlimited)
+	EvictionPolicy    string            `yaml:"eviction_policy"`    // "none" or "lru" (default "none")
 }
 
 func Default() *Config {
@@ -122,6 +123,9 @@ func (c *Config) OverrideFromEnv() {
 		if n, err := fmt.Sscanf(v, "%d", &c.ElectionMS); err == nil && n == 1 {
 		}
 	}
+	if v := os.Getenv("SIMPLE_CACHE_EVICTION_POLICY"); v != "" {
+		c.EvictionPolicy = v
+	}
 }
 
 func (c *Config) Validate() error {
@@ -174,6 +178,11 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxQPS < 0 {
 		return fmt.Errorf("max_qps must not be negative")
+	}
+	switch c.EvictionPolicy {
+	case "none", "lru", "":
+	default:
+		return fmt.Errorf("invalid eviction_policy: %q (expected 'none' or 'lru')", c.EvictionPolicy)
 	}
 	return nil
 }

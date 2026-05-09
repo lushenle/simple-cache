@@ -688,6 +688,63 @@ func ensureConnected(ctx context.Context, conn *grpc.ClientConn) error {
 		}
 	}
 }
+// BatchSetStream performs a streaming batch set of multiple key-value pairs.
+// It uses a gRPC stream which is more efficient than calling Set() in a loop,
+// especially over high-latency connections.
+func (c *Client) BatchSetStream(ctx context.Context, items map[string]string, ttl time.Duration) (int, int, error) {
+	if len(items) == 0 {
+		return 0, 0, nil
+	}
+	stream, err := c.client.BatchSet(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	formattedTTL := formatTTL(ttl)
+	for key, value := range items {
+		val, err := utils.ConvertToAnyPB(value)
+		if err != nil {
+			return 0, 0, err
+		}
+		if err := stream.Send(&pb.BatchSetRequest{
+			Key:    key,
+			Value:  val,
+			Expire: formattedTTL,
+		}); err != nil {
+			return 0, 0, err
+		}
+	}
+	resp, err := stream.CloseAndRecv()
+	if err != nil {
+		return 0, 0, err
+	}
+	return int(resp.SuccessCount), int(resp.ErrorCount), nil
+}
+// Watch subscribes to cache change events matching the given pattern.
+// Events are sent on the returned channel until the context is cancelled
+// or the connection is closed. The caller must consume from the channel
+// to prevent backpressure.
+func (c *Client) Watch(ctx context.Context, pattern string) (<-chan *pb.WatchEvent, error) {
+	stream, err := c.client.Watch(ctx, &pb.WatchRequest{Pattern: pattern})
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan *pb.WatchEvent, 64)
+	go func() {
+		defer close(ch)
+		for {
+			evt, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			select {
+			case ch <- evt:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch, nil
+}
 
 // ---------------------------------------------------------------------------
 // Sentinel errors

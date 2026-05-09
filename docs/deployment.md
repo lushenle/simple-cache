@@ -28,6 +28,10 @@
 | `allowed_origins` | []string | `[]` | HTTP CORS 白名单；为空时不放开跨域 |
 | `snapshot_enabled` | bool | `true` | distributed 模式下是否启用 Raft snapshot |
 | `snapshot_threshold` | uint64 | `1024` | 触发 snapshot 与 log compaction 的已应用日志阈值 |
+| `max_keys` | int | `0` | 最大 key 数（0 = 不限） |
+| `max_value_size` | int | `0` | 单 value 最大字节数（0 = 不限） |
+| `max_qps` | int | `0` | 全局每秒请求数限制（0 = 不限） |
+| `eviction_policy` | string | `none` | 淘汰策略：`none` 或 `lru` |
 
 ## 单机模式
 - 启动 `main` 即可，所有组件在本进程内

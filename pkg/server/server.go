@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"io"
 	"sync"
 	"time"
 
@@ -90,6 +91,7 @@ type CacheService struct {
 	grpcAddr string                 // this node's gRPC address
 	peerMap  map[string]string      // nodeID → gRPC address for all known peers
 	rl       *simpleRateLimiter
+	watchSvc *WatchService
 }
 
 // New creates a CacheService in single-node mode.
@@ -104,6 +106,11 @@ func New(c *cache.Cache, nodeID string) *CacheService {
 // SetRateLimiter enables rate limiting on the service.
 func (s *CacheService) SetRateLimiter(maxQPS int) {
 	s.rl = newSimpleRateLimiter(maxQPS)
+}
+
+// SetWatchService enables key change event publishing.
+func (s *CacheService) SetWatchService(ws *WatchService) {
+	s.watchSvc = ws
 }
 
 // SetGRPCAddr sets this node's gRPC address (used if NewWithCluster was not called).
@@ -238,22 +245,22 @@ func (s *CacheService) Peers() []string {
 }
 
 // checkLeaderRead returns nil if the node can safely serve reads.
-// In distributed mode, it checks both role and leader lease.
-func (s *CacheService) checkLeaderRead() error {
+// In distributed mode it runs the ReadIndex protocol to guarantee
+// linearizable consistency.
+func (s *CacheService) checkLeaderRead(ctx context.Context) error {
 	if s.node == nil {
 		return nil // single mode
 	}
-	if s.node.Role() != raft.Leader {
-		return status.Error(codes.FailedPrecondition, "not leader")
-	}
-	if !s.node.LeaderLeaseOK() {
-		return status.Error(codes.FailedPrecondition, "leader lease expired")
+	riCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	if _, err := s.node.ReadIndex(riCtx); err != nil {
+		return status.Errorf(codes.FailedPrecondition, "read index check failed: %v", err)
 	}
 	return nil
 }
 
 func (s *CacheService) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
-	if err := s.checkLeaderRead(); err != nil {
+	if err := s.checkLeaderRead(ctx); err != nil {
 		return nil, err
 	}
 	if !s.rl.Allow("") {
@@ -290,6 +297,9 @@ func (s *CacheService) Set(ctx context.Context, req *pb.SetRequest) (*pb.SetResp
 	if err != nil {
 		return nil, err
 	}
+	if s.watchSvc != nil {
+		s.watchSvc.PublishSet(ctx, req.Key, req.Value)
+	}
 	return resp.(*pb.SetResponse), nil
 }
 
@@ -309,6 +319,9 @@ func (s *CacheService) Del(ctx context.Context, req *pb.DelRequest) (*pb.DelResp
 	if err != nil {
 		return nil, err
 	}
+	if s.watchSvc != nil && resp.(*pb.DelResponse).Existed {
+		s.watchSvc.PublishDel(req.Key)
+	}
 	return resp.(*pb.DelResponse), nil
 }
 
@@ -327,6 +340,9 @@ func (s *CacheService) ExpireKey(ctx context.Context, req *pb.ExpireKeyRequest) 
 	}
 	if err != nil {
 		return nil, err
+	}
+	if s.watchSvc != nil && resp.(*pb.ExpireKeyResponse).Existed {
+		s.watchSvc.PublishExpire(req.Key)
 	}
 	return resp.(*pb.ExpireKeyResponse), nil
 }
@@ -351,7 +367,7 @@ func (s *CacheService) Reset(ctx context.Context, req *pb.ResetRequest) (*pb.Res
 }
 
 func (s *CacheService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.SearchResponse, error) {
-	if err := s.checkLeaderRead(); err != nil {
+	if err := s.checkLeaderRead(ctx); err != nil {
 		return nil, err
 	}
 	if !s.rl.Allow("") {
@@ -411,6 +427,52 @@ func (s *CacheService) Load(ctx context.Context, req *pb.LoadRequest) (*pb.LoadR
 		Path:        result.Path,
 		DurationMs:  result.DurationMs,
 	}, nil
+}
+
+// BatchSet receives a stream of BatchSetRequest, processes them as individual
+// Set operations, and returns the count of successes and failures.
+func (s *CacheService) BatchSet(stream pb.CacheService_BatchSetServer) error {
+	var successCount, errorCount int32
+	var firstErr string
+	for {
+		req, err := stream.Recv()
+		if err == io.EOF {
+			return stream.SendAndClose(&pb.BatchSetResponse{
+				SuccessCount: successCount,
+				ErrorCount:   errorCount,
+				FirstError:   firstErr,
+			})
+		}
+		if err != nil {
+			return err
+		}
+		if !s.rl.Allow("") {
+			errorCount++
+			if firstErr == "" {
+				firstErr = "rate limit exceeded"
+			}
+			continue
+		}
+		cmd := &command.SetCommand{
+			Key:    req.Key,
+			Value:  req.Value,
+			Expire: req.Expire,
+		}
+		var errApply error
+		if s.node != nil {
+			_, errApply = s.node.Submit(cmd)
+		} else {
+			_, errApply = s.fsm.Apply(cmd)
+		}
+		if errApply != nil {
+			errorCount++
+			if firstErr == "" {
+				firstErr = errApply.Error()
+			}
+		} else {
+			successCount++
+		}
+	}
 }
 
 // NodeID returns the node ID for use in dump file naming.

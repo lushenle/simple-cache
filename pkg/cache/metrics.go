@@ -13,6 +13,9 @@ func (c *Cache) updateSizeMetrics() {
 		metrics.ObserveOperation(time.Since(start), metrics.OpSizeCalculation)
 	}()
 
+	c.mu.RLock(metrics.LockRead)
+	defer c.mu.RUnlock()
+
 	count := len(c.items)
 	memSize := 0
 

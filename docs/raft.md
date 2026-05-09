@@ -32,7 +32,8 @@ sequenceDiagram
 ```
 
 ## 读路径
-- Leader 直接读取
+- Leader 执行 ReadIndex 协议：记录 commitIdx → 向 Follower 发送 quorum 心跳 → 确认身份后读取
+- 相比单纯的 time-based lease，ReadIndex 保证在网络分区时不会服务脏数据
 - Follower 返回 `FailedPrecondition` 错误（当前实现不做自动转发）
 
 ## 日志追平（InstallSnapshot）

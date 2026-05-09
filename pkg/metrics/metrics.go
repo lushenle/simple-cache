@@ -59,6 +59,13 @@ var (
 		[]string{"op"},
 	)
 
+	EvictionsTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "cache_evictions_total",
+			Help: "Total number of cache evictions",
+		},
+	)
+
 	KeysTotal = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "simple_cache_keys_total",
@@ -162,6 +169,20 @@ var (
 		},
 	)
 
+	RaftPendingEntries = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "raft_pending_entries",
+			Help: "Number of log entries not yet applied to state machine",
+		},
+	)
+
+	RaftSnapshotAge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "raft_snapshot_age_seconds",
+			Help: "Age of the latest snapshot in seconds",
+		},
+	)
+
 	// Persistence metrics
 	PersistenceOpTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -203,6 +224,7 @@ func Init() {
 			RequestDuration,
 			KeysTotal,
 			ExpirationHeapSize,
+				EvictionsTotal,
 			OperationDuration,
 			OperationCount,
 			CacheSize,
@@ -214,6 +236,8 @@ func Init() {
 			RaftLeaderChanges,
 			RaftAppendEntriesLatency,
 			PeersTotal,
+			RaftPendingEntries,
+			RaftSnapshotAge,
 			PersistenceOpTotal,
 			PersistenceDuration,
 			DumpKeysGauge,
@@ -291,6 +315,8 @@ func SetRaftLastApplied(v uint64)                 { RaftLastApplied.Set(float64(
 func IncRaftLeaderChanges()                       { RaftLeaderChanges.Inc() }
 func ObserveAppendEntriesLatency(d time.Duration) { RaftAppendEntriesLatency.Observe(d.Seconds()) }
 func SetPeersTotal(n int)                         { PeersTotal.Set(float64(n)) }
+func SetRaftPendingEntries(n int)              { RaftPendingEntries.Set(float64(n)) }
+func SetRaftSnapshotAge(seconds float64)        { RaftSnapshotAge.Set(seconds) }
 
 // Persistence metrics helpers
 func IncPersistenceOp(op, status string) { PersistenceOpTotal.WithLabelValues(op, status).Inc() }
@@ -298,6 +324,8 @@ func ObservePersistenceDuration(op string, d float64) {
 	PersistenceDuration.WithLabelValues(op).Observe(d)
 }
 func SetDumpKeys(n int64) { DumpKeysGauge.Set(float64(n)) }
+func IncEvictions() { EvictionsTotal.Inc() }
+
 func SetLoadKeys(loaded, skipped int64) {
 	LoadKeysGauge.WithLabelValues("loaded").Set(float64(loaded))
 	LoadKeysGauge.WithLabelValues("skipped").Set(float64(skipped))
