@@ -300,6 +300,7 @@ func (c *Cache) LoadFromBytes(nodeID string, data []byte) (*LoadResult, error) {
 	c.mu.Lock(metrics.LockWrite)
 	defer c.mu.Unlock()
 
+	c.resetLRU()
 	c.items = make(map[string]*Item)
 	c.prefixTree = radix.New()
 	c.expirationHeap = &ExpirationHeap{onSwap: c.expirationHeap.onSwap}

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"net/http"
 	"strings"
 
@@ -73,12 +74,12 @@ func hasAuthorizedMetadata(ctx context.Context, token string) bool {
 		return false
 	}
 	for _, value := range md.Get(authHeader) {
-		if value == token {
+		if subtle.ConstantTimeCompare([]byte(value), []byte(token)) == 1 {
 			return true
 		}
 	}
 	for _, value := range md.Get("authorization") {
-		if strings.TrimPrefix(value, "Bearer ") == token {
+		if subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(value, "Bearer ")), []byte(token)) == 1 {
 			return true
 		}
 	}
@@ -86,9 +87,9 @@ func hasAuthorizedMetadata(ctx context.Context, token string) bool {
 }
 
 func authorizedRequest(r *http.Request, token string) bool {
-	if r.Header.Get(authHeader) == token {
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get(authHeader)), []byte(token)) == 1 {
 		return true
 	}
 	auth := r.Header.Get("Authorization")
-	return strings.TrimPrefix(auth, "Bearer ") == token
+	return subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(auth, "Bearer ")), []byte(token)) == 1
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/lushenle/simple-cache/pkg/raft"
 	"github.com/lushenle/simple-cache/pkg/utils"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -38,12 +39,13 @@ type GetLeaderResponse struct {
 
 // simpleRateLimiter implements a token-bucket rate limiter per client.
 type simpleRateLimiter struct {
-	mu       sync.Mutex
-	tokens   map[string]struct {
+	mu          sync.Mutex
+	tokens      map[string]struct {
 		count    int
 		expireAt time.Time
 	}
-	maxQPS  int
+	maxQPS      int
+	lastCleanup time.Time
 }
 
 func newSimpleRateLimiter(maxQPS int) *simpleRateLimiter {
@@ -59,6 +61,14 @@ func newSimpleRateLimiter(maxQPS int) *simpleRateLimiter {
 	}
 }
 
+// clientPeerAddr extracts the client address from a gRPC context for rate limiting.
+func clientPeerAddr(ctx context.Context) string {
+	if p, ok := peer.FromContext(ctx); ok {
+		return p.Addr.String()
+	}
+	return "unknown"
+}
+
 func (rl *simpleRateLimiter) Allow(key string) bool {
 	if rl == nil {
 		return true
@@ -66,6 +76,17 @@ func (rl *simpleRateLimiter) Allow(key string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	now := time.Now()
+
+	// Periodically clean up expired entries (every 30s) to prevent unbounded map growth.
+	if now.Sub(rl.lastCleanup) > 30*time.Second {
+		for k, v := range rl.tokens {
+			if now.After(v.expireAt) {
+				delete(rl.tokens, k)
+			}
+		}
+		rl.lastCleanup = now
+	}
+
 	entry, ok := rl.tokens[key]
 	if !ok || now.After(entry.expireAt) {
 		rl.tokens[key] = struct {
@@ -113,7 +134,7 @@ func (s *CacheService) SetWatchService(ws *WatchService) {
 	s.watchSvc = ws
 }
 
-// SetGRPCAddr sets this node's gRPC address (used if NewWithCluster was not called).
+// SetGRPCAddr sets this node's gRPC address.
 func (s *CacheService) SetGRPCAddr(addr string) {
 	s.grpcAddr = addr
 }
@@ -263,7 +284,7 @@ func (s *CacheService) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResp
 	if err := s.checkLeaderRead(ctx); err != nil {
 		return nil, err
 	}
-	if !s.rl.Allow("") {
+	if !s.rl.Allow(clientPeerAddr(ctx)) {
 		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
 	}
 
@@ -278,7 +299,7 @@ func (s *CacheService) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResp
 }
 
 func (s *CacheService) Set(ctx context.Context, req *pb.SetRequest) (*pb.SetResponse, error) {
-	if !s.rl.Allow("") {
+	if !s.rl.Allow(clientPeerAddr(ctx)) {
 		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
 	}
 
@@ -298,13 +319,13 @@ func (s *CacheService) Set(ctx context.Context, req *pb.SetRequest) (*pb.SetResp
 		return nil, err
 	}
 	if s.watchSvc != nil {
-		s.watchSvc.PublishSet(ctx, req.Key, req.Value)
+		s.watchSvc.PublishSet(req.Key, req.Value)
 	}
 	return resp.(*pb.SetResponse), nil
 }
 
 func (s *CacheService) Del(ctx context.Context, req *pb.DelRequest) (*pb.DelResponse, error) {
-	if !s.rl.Allow("") {
+	if !s.rl.Allow(clientPeerAddr(ctx)) {
 		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
 	}
 
@@ -326,7 +347,7 @@ func (s *CacheService) Del(ctx context.Context, req *pb.DelRequest) (*pb.DelResp
 }
 
 func (s *CacheService) ExpireKey(ctx context.Context, req *pb.ExpireKeyRequest) (*pb.ExpireKeyResponse, error) {
-	if !s.rl.Allow("") {
+	if !s.rl.Allow(clientPeerAddr(ctx)) {
 		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
 	}
 
@@ -348,7 +369,7 @@ func (s *CacheService) ExpireKey(ctx context.Context, req *pb.ExpireKeyRequest) 
 }
 
 func (s *CacheService) Reset(ctx context.Context, req *pb.ResetRequest) (*pb.ResetResponse, error) {
-	if !s.rl.Allow("") {
+	if !s.rl.Allow(clientPeerAddr(ctx)) {
 		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
 	}
 
@@ -370,7 +391,7 @@ func (s *CacheService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.S
 	if err := s.checkLeaderRead(ctx); err != nil {
 		return nil, err
 	}
-	if !s.rl.Allow("") {
+	if !s.rl.Allow(clientPeerAddr(ctx)) {
 		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
 	}
 
@@ -446,7 +467,7 @@ func (s *CacheService) BatchSet(stream pb.CacheService_BatchSetServer) error {
 		if err != nil {
 			return err
 		}
-		if !s.rl.Allow("") {
+		if !s.rl.Allow(clientPeerAddr(stream.Context())) {
 			errorCount++
 			if firstErr == "" {
 				firstErr = "rate limit exceeded"

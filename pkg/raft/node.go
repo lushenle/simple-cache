@@ -46,7 +46,6 @@ type Node struct {
 	lastApply     uint64
 	lastLogIndex  uint64
 	lastLogTerm   uint64
-	leaseUntil    int64 // Leader lease expiry (UnixNano), 0 when not leader
 	snapshotIndex uint64
 	snapshotTerm  uint64
 
@@ -339,10 +338,12 @@ func (n *Node) Submit(cmd interface{}) (interface{}, error) {
 		return nil, err
 	}
 
+	timer := time.NewTimer(2 * time.Second)
 	select {
 	case result := <-waiter:
+		timer.Stop()
 		return result.resp, result.err
-	case <-time.After(2 * time.Second):
+	case <-timer.C:
 		return nil, ErrCommit{}
 	}
 }
@@ -1160,7 +1161,6 @@ func (n *Node) StepDown() error {
 	n.votedFor = ""
 	n.role.Store(Follower)
 	n.leaderID.Store("")
-	n.leaseUntil = 0
 	metrics.SetRaftRole(n.id, string(Follower))
 	for idx, w := range n.applyWaiter {
 		w <- applyResult{resp: nil, err: ErrNotLeader{Leader: ""}}

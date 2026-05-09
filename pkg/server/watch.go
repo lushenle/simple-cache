@@ -1,15 +1,18 @@
 package server
 
 import (
-	"context"
 	"path/filepath"
 	"sync"
+
+	"sync/atomic"
 
 	"github.com/lushenle/simple-cache/pkg/pb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/anypb"
 )
+
+var droppedEvents int64
 
 // subscriber holds a channel onto which watch events are pushed.
 type subscriber struct {
@@ -28,7 +31,7 @@ func (s *subscriber) send(evt *pb.WatchEvent) {
 	select {
 	case s.ch <- evt:
 	default:
-		// drop if buffer full
+		atomic.AddInt64(&droppedEvents, 1)
 	}
 }
 
@@ -110,7 +113,7 @@ func (w *WatchService) Close() {
 }
 
 // PublishSet publishes a SET event for the given key/value.
-func (w *WatchService) PublishSet(ctx context.Context, key string, value *anypb.Any) {
+func (w *WatchService) PublishSet(key string, value *anypb.Any) {
 	w.Publish(&pb.WatchEvent{
 		Type:  pb.WatchEventType_EVENT_SET,
 		Key:   key,

@@ -150,6 +150,8 @@ func (c *Cache) evictLRU() bool {
 		return false
 	}
 	key := elem.Value.(string)
+	c.lruList.Remove(elem)
+	delete(c.lruElements, key)
 	c.lruMu.Unlock()
 	c.delInternal(key)
 	metrics.IncEvictions()
