@@ -57,6 +57,7 @@ func (c *Cache) cleanupExpired() {
 			if item.expiration.Equal(entry.expiration) {
 				delete(c.items, entry.key)
 				c.prefixTree.Delete(entry.key)
+				c.delLRU(entry.key)
 				processed++
 			}
 		}

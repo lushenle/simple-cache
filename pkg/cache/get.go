@@ -21,7 +21,7 @@ func (c *Cache) Get(key string) (any, bool) {
 	item, found := c.items[key]
 	if !found {
 		c.mu.RUnlock()
-		return "", success
+		return nil, success
 	}
 
 	if !item.expiration.IsZero() && time.Now().After(item.expiration) {
@@ -47,7 +47,7 @@ func (c *Cache) handleExpiredKey(key string) (any, bool) {
 
 	if !item.expiration.IsZero() && time.Now().After(item.expiration) {
 		// Use delInternal for complete cleanup (heap + prefixTree + items)
-		c.delInternal(key)
+		c.delLRU(key); c.delInternal(key)
 		return "", false
 	}
 

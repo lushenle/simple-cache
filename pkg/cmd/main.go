@@ -207,11 +207,11 @@ func main() {
 		}
 	}
 
-	// 6. Close watch service
-	watchSvc.Close()
-
-	// 7. Close cache
+	// 6. Close cache (stops Set/Del operations that might publish events)
 	c.Close()
+
+	// 7. Close watch service (no more events to publish)
+	watchSvc.Close()
 
 	// 8. Stop config watcher
 	close(stop)

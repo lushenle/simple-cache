@@ -186,7 +186,6 @@ func NewCluster(ctx context.Context, nodes []NodeSpec, opts ...ClientOption) (*C
 			c.nodeMap[c.nodes[i].ID] = i
 		}
 	}
-
 	// Initial leader discovery: try nodes in order.
 	if err := c.discoverLeader(ctx); err != nil {
 		return nil, err
@@ -367,12 +366,8 @@ func (c *Client) connectTo(ctx context.Context, addr string) error {
 	old := c.conn
 	c.conn = conn
 	c.client = pb.NewCacheServiceClient(conn)
-	// Find the index in our nodes list.
-	if idx, ok := c.nodeMap[addr]; ok {
-		c.idx = idx
-	} else {
-		c.idx = 0
-	}
+	// Find the index in our nodes list by gRPC address.
+	c.idx = c.indexOfAddr(addr)
 	c.mu.Unlock()
 
 	if old != nil {
@@ -668,6 +663,16 @@ func formatTTL(d time.Duration) string {
 	return d.String()
 }
 
+// indexOfAddr returns the node index for the given gRPC address, or 0 if not found.
+func (c *Client) indexOfAddr(addr string) int {
+	for i, n := range c.nodes {
+		if n.GRPCAddr == addr {
+			return i
+		}
+	}
+	return 0
+}
+
 // ensureConnected blocks until the gRPC connection becomes READY.
 func ensureConnected(ctx context.Context, conn *grpc.ClientConn) error {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
@@ -695,7 +700,13 @@ func (c *Client) BatchSetStream(ctx context.Context, items map[string]string, tt
 	if len(items) == 0 {
 		return 0, 0, nil
 	}
-	stream, err := c.client.BatchSet(ctx)
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil {
+		return 0, 0, ErrNoClient
+	}
+	stream, err := cli.BatchSet(ctx)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -722,24 +733,48 @@ func (c *Client) BatchSetStream(ctx context.Context, items map[string]string, tt
 // Watch subscribes to cache change events matching the given pattern.
 // Events are sent on the returned channel until the context is cancelled
 // or the connection is closed. The caller must consume from the channel
-// to prevent backpressure.
+// to prevent backpressure. If the connection drops, Watch automatically
+// reconnects and re-subscribes with the same pattern.
 func (c *Client) Watch(ctx context.Context, pattern string) (<-chan *pb.WatchEvent, error) {
-	stream, err := c.client.Watch(ctx, &pb.WatchRequest{Pattern: pattern})
-	if err != nil {
-		return nil, err
-	}
 	ch := make(chan *pb.WatchEvent, 64)
 	go func() {
 		defer close(ch)
 		for {
-			evt, err := stream.Recv()
-			if err != nil {
+			// Establish or re-establish the watch stream.
+			c.mu.Lock()
+			cli := c.client
+			c.mu.Unlock()
+			if cli == nil {
 				return
 			}
-			select {
-			case ch <- evt:
-			case <-ctx.Done():
-				return
+			stream, err := cli.Watch(ctx, &pb.WatchRequest{Pattern: pattern})
+			if err != nil {
+				if !isNotLeaderErr(err) {
+					return
+				}
+				// Try to rebalance and retry.
+				reCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				rebalanceErr := c.rebalance(reCtx)
+				cancel()
+				if rebalanceErr != nil {
+					return
+				}
+				continue
+			}
+			// Receive events from the stream.
+			for {
+				evt, err := stream.Recv()
+				if err != nil {
+					if isNotLeaderErr(err) {
+						break // reconnect
+					}
+					return
+				}
+				select {
+				case ch <- evt:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()

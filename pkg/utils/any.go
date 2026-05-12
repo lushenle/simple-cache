@@ -24,9 +24,25 @@ func FromAnyPB(a *anypb.Any) (any, error) {
 	if err := a.UnmarshalTo(&i64); err == nil {
 		return i64.Value, nil
 	}
+	var i32 wrapperspb.Int32Value
+	if err := a.UnmarshalTo(&i32); err == nil {
+		return int64(i32.Value), nil
+	}
+	var u64 wrapperspb.UInt64Value
+	if err := a.UnmarshalTo(&u64); err == nil {
+		return u64.Value, nil
+	}
+	var u32 wrapperspb.UInt32Value
+	if err := a.UnmarshalTo(&u32); err == nil {
+		return uint64(u32.Value), nil
+	}
 	var f64 wrapperspb.DoubleValue
 	if err := a.UnmarshalTo(&f64); err == nil {
 		return f64.Value, nil
+	}
+	var f32 wrapperspb.FloatValue
+	if err := a.UnmarshalTo(&f32); err == nil {
+		return float64(f32.Value), nil
 	}
 	var bytes wrapperspb.BytesValue
 	if err := a.UnmarshalTo(&bytes); err == nil {
