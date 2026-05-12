@@ -137,11 +137,11 @@ data/cache-{node_id}.dump.tmp    # 写入中的临时文件
 
 | 字段                       | 类型              | 说明                                          |
 | -------------------------- | ----------------- | --------------------------------------------- |
-| `version`                  | int               | 格式版本号，当前为 1                          |
+| `version`                  | int               | 格式版本号，当前为 2                          |
 | `node_id`                  | string            | 产生快照的节点 ID                             |
 | `dumped_at`                | string (ISO 8601) | 快照生成时间                                  |
 | `total_keys`               | int               | 快照中的总 key 数                             |
-| `expired_keys`             | int               | 快照时已过期但仍被包含的 key 数               |
+| `expired_keys`             | int               | 快照时检测到已过期并跳过的 key 数             |
 | `entries[].key`            | string            | 缓存 key                                      |
 | `entries[].value`          | string            | 缓存 value（序列化为字符串）                  |
 | `entries[].value_type`     | string            | 原始 value 类型（`string`、`[]byte`、`json`） |
@@ -154,10 +154,11 @@ data/cache-{node_id}.dump.tmp    # 写入中的临时文件
 
 | 原始类型                    | 序列化方式             | value_type | 反序列化后类型                        |
 | --------------------------- | ---------------------- | ---------- | ------------------------------------- |
-| `string`                    | 直接存储               | `"string"` | `string`                              |
-| `[]byte`                    | base64.StdEncoding | `"bytes"`  | `[]byte`（base64 编码，支持任意字节，v2 特性） |
-| `json.Marshal` 可处理的类型 | JSON 编码              | `"json"`   | `string`（JSON 字符串）               |
-| 其他类型                    | `fmt.Sprintf("%v", v)` | `"other"`  | `string`                              |
+| `string`                    | 直接存储                 | `"string"` | `string`                                |
+| `[]byte`                    | base64 StdEncoding       | `"bytes"`  | `[]byte`（base64 解码还原，v2 特性）      |
+| `json.Marshal` 可处理的类型 | JSON 编码                | `"json"`   | 反序列化后的原始类型                      |
+| 其他类型                    | `fmt.Sprintf("%v", v)`   | `"other"`  | `string`                                |
+| `nil`                       | 空字符串                 | `"nil"`    | `nil`                                   |
 
 ---
 
@@ -390,20 +391,20 @@ data_dir: data
 
 ---
 
-## 10. 文件变更清单
+## 10. 相关文件
 
-| 操作     | 文件路径                        | 说明                                                                   |
-| -------- | ------------------------------- | ---------------------------------------------------------------------- |
-| **新建** | `docs/cache-persistence.md`     | 本设计文档                                                             |
-| **新建** | `pkg/proto/dump.proto`          | Dump/Load 的 protobuf 定义                                             |
-| **新建** | `pkg/pb/dump.pb.go`             | 生成的 Go 代码                                                         |
-| **新建** | `pkg/cache/persistence.go`      | 核心序列化/反序列化逻辑                                                |
-| **新建** | `pkg/cache/persistence_test.go` | 持久化单元测试                                                         |
-| **修改** | `pkg/proto/cache.proto`         | 添加 Dump/Load RPC 方法和 HTTP annotation                              |
-| **修改** | `pkg/server/server.go`          | 新增 Dump()、Load()、NodeID() gRPC 方法；CacheService 增加 nodeID 字段 |
-| **修改** | `pkg/config/config.go`          | 新增配置字段                                                           |
-| **修改** | `pkg/cmd/main.go`               | 启动时 Load + 关闭时 Dump                                              |
-| **修改** | `pkg/metrics/metrics.go`        | 新增持久化相关指标                                                     |
-| **修改** | `pkg/client/client_test.go`     | 更新 server.New() 调用签名                                             |
-| **修改** | `config.example.yaml`           | 新增配置项示例                                                         |
-| **修改** | `README.md`                     | 新增持久化功能说明                                                     |
+| 文件路径                        | 说明                                                                   |
+| ------------------------------- | ---------------------------------------------------------------------- |
+| `docs/cache-persistence.md`     | 本设计文档                                                             |
+| `pkg/proto/dump.proto`          | Dump/Load 的 protobuf 定义                                             |
+| `pkg/pb/dump.pb.go`             | 生成的 Go 代码                                                         |
+| `pkg/cache/persistence.go`      | 核心 Dump/Load 序列化/反序列化逻辑 + DumpToBytes/LoadFromBytes         |
+| `pkg/cache/persistence_test.go` | 持久化单元测试                                                         |
+| `pkg/proto/cache.proto`         | CacheService 定义，含 Dump/Load RPC 方法和 HTTP annotation              |
+| `pkg/server/server.go`          | Dump()、Load() gRPC handler + NodeID()                                 |
+| `pkg/config/config.go`          | 持久化相关配置字段（load_on_startup / dump_on_shutdown / dump_format / data_dir） |
+| `pkg/cmd/main.go`               | 启动时自动 Load（仅 single）+ 关闭时自动 Dump                          |
+| `pkg/metrics/metrics.go`        | 持久化相关 Prometheus 指标                                             |
+| `pkg/fsm/fsm.go`                | Snapshot / RestoreSnapshot（Raft 侧使用 DumpToBytes / LoadFromBytes）  |
+| `config.example.yaml`           | 配置项示例                                                             |
+| `README.md`                     | 持久化功能说明                                                         |

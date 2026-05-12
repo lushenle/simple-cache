@@ -167,6 +167,8 @@ CONFIG_PATH=configs/node4.yaml go run pkg/cmd/main.go
 
 ### 5.4 由 Leader 执行加入
 
+> 可以通过 `GET /cluster/peers` 确认当前 Leader；也可使用 `GET /healthz` 查看 `leader_grpc_addr` 字段。
+
 ```bash
 curl -X POST http://<leader-http>/cluster/join \
   -H "Content-Type: application/json" \
@@ -295,7 +297,7 @@ curl http://<node-metrics>/metrics | grep -E 'raft_commit_index|raft_last_applie
 建议操作：
 
 ```bash
-watch -n 1 'curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/readyz'
+watch -n 1 "curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/readyz; echo"
 ```
 
 ### 8.3 多节点故障 / 丢失多数派
@@ -375,11 +377,13 @@ watch -n 1 'curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/ready
 - 检查 `cache_evictions_total` 指标是否在增长
 - 验证 `cache_size_bytes` 是否已接近容量上限
 
-### 9.6 Watch 推送延迟
+### 9.6 Watch 推送问题
 如果客户端收不到 Watch 事件：
 - 确认客户端已正确调用 `Watch(ctx, pattern)`
+- 确认 pattern 与 key 匹配（支持 `filepath.Match` 通配符）
 - 确认事件类型匹配（Set/Del/Expire）
-- 检查 subscriber buffer（默认 64），消费过慢时事件会丢失
+- subscriber buffer 默认 64 条，消费过慢时事件会静默丢弃（可通过 `droppedEvents` 原子计数器观察）
+- 客户端 SDK 的 `Watch` 方法内置自动重连，Leader 切换时会自动重新订阅
 
 ### 9.7 WAL 持续增长
 
