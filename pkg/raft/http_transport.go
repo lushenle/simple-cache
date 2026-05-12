@@ -244,21 +244,30 @@ func (t *HTTPTransport) Peers() []string {
 
 func (t *HTTPTransport) broadcastVote(req RequestVoteReq) int {
 	peers := t.Peers()
+	var mu sync.Mutex
 	granted := 0
+	var wg sync.WaitGroup
 	for _, p := range peers {
 		if t.isSelf(p) {
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		out, err := t.sendVote(ctx, p, req)
-		cancel()
-		if err != nil {
-			continue
-		}
-		if out.VoteGranted {
-			granted++
-		}
+		wg.Add(1)
+		go func(peer string) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			out, err := t.sendVote(ctx, peer, req)
+			cancel()
+			if err != nil {
+				return
+			}
+			if out.VoteGranted {
+				mu.Lock()
+				granted++
+				mu.Unlock()
+			}
+		}(p)
 	}
+	wg.Wait()
 	return granted
 }
 

@@ -9,6 +9,8 @@
   <img src="https://img.shields.io/badge/Protocol-gRPC%20%2B%20REST-27A36E?logo=grpc" alt="Protocol">
   <img src="https://img.shields.io/badge/Consensus-Raft%20Protocol-FF6B6B" alt="Raft">
   <img src="https://img.shields.io/badge/Monitoring-Prometheus-E6522C?logo=prometheus" alt="Prometheus">
+  <img src="https://img.shields.io/badge/UI-React%2018-61DAFB?logo=react" alt="React">
+  <img src="https://img.shields.io/badge/i18n-EN%20%7C%20ZH-FF6B6B" alt="i18n">
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
 </p>
 
@@ -27,6 +29,7 @@
 - [项目结构](#项目结构)
 - [API 参考](#api-参考)
   - [gRPC 接口](#grpc-接口)
+  - [Admin API](#admin-api)
   - [REST 接口](#rest-接口)
   - [集群管理接口](#集群管理接口)
   - [运维接口](#运维接口)
@@ -36,13 +39,16 @@
   - [批量操作](#批量操作)
   - [搜索](#搜索)
   - [过期管理](#过期管理)
+- [管理后台](#管理后台)
 - [配置说明](#配置说明)
 - [分布式部署指南](#分布式部署指南)
+  - [Docker 部署](#docker-部署)
 - [运维手册](docs/runbook.md)
 - [监控指标](#监控指标)
 - [开发指南](#开发指南)
   - [构建](#构建)
   - [测试](#测试)
+  - [前端开发](#前端开发)
   - [Proto 代码生成](#proto-代码生成)
   - [代码格式化](#代码格式化)
 - [设计详解](#设计详解)
@@ -74,6 +80,8 @@
 - **优雅关闭** — 完整的 9 步优雅关闭流程（gRPC → Gateway → Raft → Dump → Cache → Watch → Config → Metrics → Logger）
 - **数据持久化** — 支持将缓存数据 Dump 到本地磁盘（二进制/JSON 双格式）；single 模式支持自动/手动 Load 恢复，distributed 模式依赖 WAL replay
 - **客户端 SDK** — 封装完整的 gRPC 客户端，提供友好的 Go API（包括批量操作）
+- **Web 管理后台** — React 18 + TypeScript 内嵌 SPA（`/admin/`），提供仪表盘、集群管理、缓存浏览、订阅管理、运维操作、系统设置六大模块
+- **国际化** — 管理后台支持中英文切换
 - **自动 Leader 切主** — Cluster 模式 client 自动发现 Leader，遇到 `not leader` 错误自动重试并切主
 - **gRPC Name Resolver** — 内置 `simplecache://` URI scheme resolver，与 gRPC 框架原生集成
 
@@ -95,6 +103,7 @@ graph TB
     subgraph "Simple-Cache 节点"
         subgraph "接入与安全层"
             GW["HTTP Gateway<br/>:8080<br/>(grpc-gateway + Swagger)"]
+            ADMIN["Admin SPA<br/>:8080/admin/<br/>(React 18 + TypeScript)"]
             GRPC["gRPC Server<br/>:5051<br/>(可启用 TLS)"]
             AUTH["Auth / CORS<br/>(Token + Middleware)"]
             METRICS["Metrics Server<br/>:2112<br/>(Prometheus)"]
@@ -102,6 +111,7 @@ graph TB
 
         subgraph "服务层"
             SVC["CacheService<br/>(命令分发 + Probe)"]
+            ADMIN_API["Admin API<br/>(/admin/api/*)"]
         end
 
         subgraph "共识层"
@@ -146,7 +156,9 @@ graph TB
 | `config` | `pkg/config/` | 配置管理：YAML 加载、原子配置、热重载 |
 | `metrics` | `pkg/metrics/` | Prometheus 指标采集与暴露 |
 | `log` | `pkg/log/` | 日志系统：zap 结构化日志 + lumberjack 轮转 |
-| `client` | `pkg/client/` | gRPC 客户端 SDK |
+| `client` | `pkg/client/` | gRPC 客户端 SDK + Name Resolver |
+| `admin` | `pkg/server/admin.go` | 管理后台 API：状态聚合、配置查看、指标汇总、SSE 推送、集群节点信息 |
+| `frontend` | `frontend/` | React SPA 管理后台（嵌入 `pkg/cmd/admin-dist/`） |
 
 ---
 
@@ -422,7 +434,21 @@ simple-cache/
 │   ├── node1.yaml               # 分布式节点 1 配置示例
 │   ├── node2.yaml               # 分布式节点 2 配置示例
 │   └── node3.yaml               # 分布式节点 3 配置示例
+├── docker/                      # Docker Compose 节点配置
+│   ├── node1.yaml
+│   ├── node2.yaml
+│   └── node3.yaml
 ├── docs/                        # 项目文档
+├── frontend/                    # 管理后台 SPA
+│   ├── src/
+│   │   ├── api/                 #   API 客户端（admin/cache/cluster）
+│   │   ├── components/          #   UI 组件（layout/cache/cluster/metrics/watch）
+│   │   ├── hooks/               #   React hooks（useAuth/useCache/useCluster/useMetrics）
+│   │   ├── i18n/                #   国际化（I18nProvider + translations）
+│   │   ├── pages/               #   页面（Dashboard/Cluster/CacheBrowser/...）
+│   │   └── styles/              #   全局样式
+│   ├── vite.config.ts
+│   └── package.json
 ├── pkg/
 │   ├── cache/                   # 📦 缓存引擎核心
 │   │   ├── cache.go             #   Cache 主结构 + New/Close + LRU 淘汰
@@ -443,6 +469,8 @@ simple-cache/
 │   │       └── resolver.go
 │   ├── cmd/                     # 📦 主程序入口
 │   │   ├── main.go              #   启动流程 + 优雅关闭 + 集群管理 HTTP 端点
+│   │   ├── admin.go             #   Admin SPA 嵌入 + catch-all 路由
+│   │   ├── admin-dist/          #   内嵌管理后台静态文件（构建产物）
 │   │   └── swagger/             #   内嵌 Swagger UI 静态文件
 │   ├── command/                 # 📦 命令定义 (Command Pattern)
 │   │   ├── command.go           #   Set/Del/ExpireKey/Reset/Search Command
@@ -471,7 +499,8 @@ simple-cache/
 │   ├── server/                  # 📦 gRPC 服务层
 │   │   ├── server.go            #   CacheService 实现 (所有 RPC + 速率限制 + Leader 读)
 │   │   ├── auth.go              #   gRPC/HTTP 认证拦截器
-│   │   └── watch.go             #   WatchService 发布/订阅
+│   │   ├── watch.go             #   WatchService 发布/订阅
+│   │   └── admin.go             #   Admin API：状态聚合、指标汇总、配置、SSE 推送
 │   └── utils/                   # 📦 工具函数 (Any PB 转换等)
 ├── test/e2e/                    # 端到端测试
 ├── config.example.yaml          # 配置示例
@@ -505,6 +534,23 @@ simple-cache/
 **SearchRequest.MatchMode**：
 - `WILDCARD (0)` — 通配符匹配（默认），支持 `*`、`?`、`[...]`
 - `REGEX (1)` — 正则表达式匹配
+
+### Admin API
+
+管理后台专用接口，提供聚合状态和预处理数据，挂载在同一 HTTP 端口下（`/admin/api/*`）。
+
+| HTTP 方法 | 路径 | 说明 |
+|-----------|------|------|
+| `GET` | `/admin/api/status` | 聚合节点状态（模式、角色、运行时间、缓存统计、内存使用） |
+| `GET` | `/admin/api/metrics/summary` | 指标摘要（Prometheus 采集 + 聚合计算） |
+| `GET` | `/admin/api/config` | 当前配置（已脱敏，不含 `auth_token`） |
+| `GET` | `/admin/api/subscriptions` | 活跃 Watch 订阅列表 |
+| `DELETE` | `/admin/api/subscriptions/:id` | 终止指定订阅 |
+| `GET` | `/admin/api/cluster/nodes` | 集群节点详情（含角色、Leader 标识） |
+| `GET` | `/admin/api/raft` | Raft 状态（term、commit/lastApplied、peers） |
+| `GET` | `/admin/api/keys/stats` | 键统计（总数、过期堆大小、淘汰策略、内存估算） |
+| `POST` | `/admin/api/set/{key}` | Plain-value Set（前端无需感知 protobuf Any 编码） |
+| `GET` | `/admin/api/watch` | Watch 事件 SSE 流（`?pattern=*` 过滤；`?token=` 鉴权） |
 
 ### REST 接口
 
@@ -737,6 +783,52 @@ conn, err := grpc.NewClient("simplecache:///:5051,:5052,:5053",
 
 ---
 
+## 管理后台
+
+Simple-Cache 内嵌了一个 React 18 + TypeScript 单页管理后台，可通过 `http://<http_addr>/admin/` 访问。
+
+### 功能模块
+
+| 页面 | 路径 | 功能 |
+|------|------|------|
+| **仪表盘** | `/admin/` | 概览面板：关键指标卡片、请求延迟/QPS/内存/Key 数量趋势图、集群状态、Raft 状态 |
+| **集群管理** | `/admin/cluster` | 节点列表（含角色/状态标签）、加入/移除节点、Leader 主动退位、Raft 指标面板 |
+| **缓存浏览** | `/admin/cache` | Key 搜索（通配符/正则）、新建/编辑/删除 Key、TTL 设置、批量写入、清空缓存 |
+| **Key 详情** | `/admin/cache/:key` | 单个 Key 的值、类型、TTL、大小等详细信息 |
+| **订阅管理** | `/admin/subscriptions` | 管理 Watch 订阅、实时事件流展示、暂停/恢复/清空 |
+| **运维操作** | `/admin/operations` | Dump/Load 持久化操作、缓存状态统计 |
+| **系统设置** | `/admin/settings` | 当前配置只读视图 |
+
+### 技术栈
+
+- React 18 + TypeScript + Vite
+- React Router (BrowserRouter, basename `/admin`)
+- TanStack Query (React Query) — 服务端状态管理、自动轮询
+- Recharts — 指标图表
+- Tailwind CSS — 样式
+
+### 认证
+
+管理后台本身是静态文件（公开），但所有 API 调用均需携带 `auth_token`。首次访问会显示登录页，输入 token 后存入 `localStorage`，后续请求自动附加 `x-api-token` 头。
+
+### 国际化
+
+支持中文/英文切换，默认根据浏览器语言自动选择。70+ 翻译键覆盖所有 UI 文案。
+
+### 构建
+
+```bash
+# 开发模式（前端 dev server + Go 后端独立运行）
+cd frontend && npm run dev    # Vite 端口 5173，自动 proxy API 到 8080
+go run pkg/cmd/main.go       # Go 后端
+
+# 生产构建（前端构建 + 内嵌到二进制）
+make frontend    # npm ci → build → 复制 dist 到 pkg/cmd/admin-dist/
+make build-with-ui  # 前端构建 + Go 编译
+```
+
+---
+
 ## 配置说明
 
 配置文件默认为 `config.yaml`，可通过环境变量 `CONFIG_PATH` 指定路径。
@@ -777,6 +869,29 @@ conn, err := grpc.NewClient("simplecache:///:5051,:5052,:5053",
 ## 分布式部署指南
 
 > 扩缩容、故障恢复、探针与值班操作请直接参考 [运维手册](docs/runbook.md)。
+
+### Docker 部署
+
+```bash
+# 构建镜像
+make docker-build
+
+# 使用 docker-compose 启动 3 节点集群
+docker compose up -d
+
+# 访问管理后台
+open http://localhost:8080/admin/
+```
+
+Dockerfile 采用多阶段构建（Node 构建前端 → Go 构建二进制 → Alpine 运行镜像），最终镜像约 30 MB。
+
+各服务端口映射：
+
+| 容器 | HTTP (:8080) | gRPC (:5051) | Raft (:9090) | Metrics (:2112) |
+|------|-------------|-------------|-------------|----------------|
+| node1 | 8080 | 5051 | 9090 | 2112 |
+| node2 | 8081 | 5052 | 9091 | 2113 |
+| node3 | 8082 | 5053 | 9092 | 2114 |
 
 ### 架构概览
 
@@ -907,6 +1022,22 @@ make ci
 # 运行基准测试
 go test -bench=. -benchmem ./pkg/cache/
 go test -bench=. -benchmem ./bench/
+```
+
+### 前端开发
+
+```bash
+# 安装依赖
+make frontend-install
+
+# 构建前端（生成 dist/）
+make frontend-build
+
+# 构建前端 + 嵌入到 Go 二进制
+make frontend
+
+# 构建带管理后台的完整二进制
+make build-with-ui
 ```
 
 ### Proto 代码生成

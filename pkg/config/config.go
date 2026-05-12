@@ -35,10 +35,10 @@ type Config struct {
 	AllowedOrigins    []string          `yaml:"allowed_origins"`
 	SnapshotEnabled   bool              `yaml:"snapshot_enabled"`
 	SnapshotThreshold uint64            `yaml:"snapshot_threshold"`
-	MaxKeys           int               `yaml:"max_keys"`            // max cache keys (0 = unlimited)
-	MaxValueSize      int               `yaml:"max_value_size"`      // max value size in bytes (0 = unlimited)
-	MaxQPS            int               `yaml:"max_qps"`             // max requests/sec per client (0 = unlimited)
-	EvictionPolicy    string            `yaml:"eviction_policy"`    // "none" or "lru" (default "none")
+	MaxKeys           int               `yaml:"max_keys"`        // max cache keys (0 = unlimited)
+	MaxValueSize      int               `yaml:"max_value_size"`  // max value size in bytes (0 = unlimited)
+	MaxQPS            int               `yaml:"max_qps"`         // max requests/sec per client (0 = unlimited)
+	EvictionPolicy    string            `yaml:"eviction_policy"` // "none" or "lru" (default "none")
 }
 
 func Default() *Config {
@@ -50,7 +50,7 @@ func Default() *Config {
 		RaftHTTPAddr:      ":9090",
 		MetricsAddr:       ":2112",
 		HeartbeatMS:       200,
-		ElectionMS:        1200,
+		ElectionMS:        5000,
 		HotReload:         false,
 		LoadOnStartup:     true,
 		DumpOnShutdown:    true,
@@ -138,10 +138,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("node_id must not be empty")
 	}
 	for name, addr := range map[string]string{
-		"grpc_addr":     c.GRPCAddr,
-		"http_addr":     c.HTTPAddr,
+		"grpc_addr":      c.GRPCAddr,
+		"http_addr":      c.HTTPAddr,
 		"raft_http_addr": c.RaftHTTPAddr,
-		"metrics_addr":  c.MetricsAddr,
+		"metrics_addr":   c.MetricsAddr,
 	} {
 		if addr == "" {
 			return fmt.Errorf("%s must not be empty", name)

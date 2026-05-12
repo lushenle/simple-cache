@@ -2,6 +2,8 @@
 
 所有指标通过独立的 Metrics 端口（默认 `:2112`，配置项 `metrics_addr`）暴露为 `/metrics` 端点。同端口还提供 `/debug/pprof/` 运行时性能分析。
 
+管理后台通过 `GET /admin/api/metrics/summary` 提供预处理后的指标摘要（从 Prometheus Gatherer 采集并聚合），供前端仪表盘实时展示（5 秒轮询）。
+
 ## 缓存指标
 - 请求计数：`simple_cache_requests_total{op="get|set|del|search|expire|reset"}`
 - 请求耗时：`simple_cache_request_duration_seconds_bucket{op=...}` 直方图

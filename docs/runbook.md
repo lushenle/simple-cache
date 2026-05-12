@@ -10,6 +10,8 @@
   - WAL 持久化
   - snapshot / log compaction
   - `InstallSnapshot` 追平落后 follower
+- Web 管理后台：内嵌 React 18 SPA，`http://<http_addr>/admin/`，提供仪表盘、集群管理、缓存浏览、运维操作等功能
+- Docker 部署：支持 docker-compose 一键启动 3 节点集群
 
 > 当前 distributed 模式下，读写请求都应命中 Leader。Follower 默认不对业务流量返回 ready。推荐使用 `NewCluster` 客户端（自动发现 Leader、自动切主）。
 
@@ -24,7 +26,20 @@
 | `raft_http_addr` | Raft 节点间复制与选举通信 |
 | `metrics_addr` | Prometheus 指标端口 |
 
-### 2.2 关键数据文件
+### 2.2 管理后台
+
+管理后台通过 HTTP 端口提供，包含以下功能页签：
+
+| 页面 | URL | 用途 |
+|------|-----|------|
+| Dashboard | `/admin/` | 关键指标卡片、QPS/延迟/内存趋势图、集群状态 |
+| Cluster | `/admin/#/cluster` | 节点列表、加入/移除/退位操作 |
+| Cache Browser | `/admin/#/cache` | Key 搜索/CRUD/TTL 管理 |
+| Subscriptions | `/admin/#/subscriptions` | Watch 订阅管理 + 实时事件流 |
+| Operations | `/admin/#/operations` | Dump/Load + 缓存统计 |
+| Settings | `/admin/#/settings` | 配置查看 |
+
+### 2.3 关键数据文件
 
 位于 `data_dir` 目录下：
 
@@ -36,7 +51,7 @@
 | `cache-<node_id>.dump` | single 模式缓存 dump（二进制） |
 | `cache-<node_id>.dump.json` | single 模式缓存 dump（JSON） |
 
-### 2.3 探针语义
+### 2.4 探针语义
 
 | 接口 | 含义 |
 |------|------|
@@ -408,7 +423,51 @@ watch -n 1 "curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/readyz;
 - distributed 模式不要人工操作 `cache.Load`
 - 定期检查 `data_dir` 中 WAL 与 snapshot 文件增长情况
 
-## 11. 值班常用命令
+## 11. Docker 运维
+
+### 11.1 启动与停止
+
+```bash
+# 启动集群
+docker compose up -d
+
+# 查看日志
+docker compose logs -f
+
+# 停止集群
+docker compose down
+
+# 停止 + 清理数据卷
+docker compose down -v
+
+# 重启单节点
+docker compose restart node2
+```
+
+### 11.2 容器内执行命令
+
+```bash
+# 查看健康状态
+docker compose exec node1 curl http://localhost:8080/healthz
+
+# 查看就绪状态
+docker compose exec node1 curl http://localhost:8080/readyz
+
+# 查看集群节点
+docker compose exec node1 curl http://localhost:8080/cluster/peers
+
+# 查看指标
+docker compose exec node1 curl http://localhost:2112/metrics | head -30
+```
+
+### 11.3 观察数据文件
+
+```bash
+docker compose exec node1 ls -lh /data/
+docker compose exec node1 stat /data/raft-*.wal*
+```
+
+## 12. 值班常用命令
 
 ### 11.1 探针与节点状态
 

@@ -1,9 +1,9 @@
 package server
 
 import (
+	"fmt"
 	"path/filepath"
 	"sync"
-
 	"sync/atomic"
 
 	"github.com/lushenle/simple-cache/pkg/pb"
@@ -12,51 +12,55 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
-var droppedEvents int64
+var (
+	droppedEvents int64
+	subIDCounter  int64
+)
 
-// subscriber holds a channel onto which watch events are pushed.
-type subscriber struct {
-	pattern string
-	ch      chan *pb.WatchEvent
+// Subscriber holds a channel onto which watch events are pushed.
+type Subscriber struct {
+	ID      string
+	Pattern string
+	Ch      chan *pb.WatchEvent
 	mu      sync.Mutex
 	closed  bool
 }
 
-func (s *subscriber) send(evt *pb.WatchEvent) {
+func (s *Subscriber) Send(evt *pb.WatchEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return
 	}
 	select {
-	case s.ch <- evt:
+	case s.Ch <- evt:
 	default:
 		atomic.AddInt64(&droppedEvents, 1)
 	}
 }
 
-func (s *subscriber) close() {
+func (s *Subscriber) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.closed {
-		close(s.ch)
+		close(s.Ch)
 		s.closed = true
 	}
 }
 
-// watcher matches patterns against keys.
-func (s *subscriber) matches(key string) bool {
-	if s.pattern == "" {
+// Matches checks whether the given key matches the subscriber's pattern.
+func (s *Subscriber) Matches(key string) bool {
+	if s.Pattern == "" {
 		return true
 	}
-	matched, _ := filepath.Match(s.pattern, key)
+	matched, _ := filepath.Match(s.Pattern, key)
 	return matched
 }
 
 // WatchService manages subscribers and publishes cache change events.
 type WatchService struct {
 	mu          sync.RWMutex
-	subscribers []*subscriber
+	subscribers []*Subscriber
 }
 
 // NewWatchService creates a new WatchService.
@@ -65,12 +69,12 @@ func NewWatchService() *WatchService {
 }
 
 // Subscribe registers a new subscriber for the given pattern.
-// Returns a channel that receives WatchEvent values. The caller must
-// call Unsubscribe when done to avoid leaking goroutines.
-func (w *WatchService) Subscribe(pattern string) *subscriber {
-	s := &subscriber{
-		pattern: pattern,
-		ch:      make(chan *pb.WatchEvent, 64),
+func (w *WatchService) Subscribe(pattern string) *Subscriber {
+	id := fmt.Sprintf("sub-%d", atomic.AddInt64(&subIDCounter, 1))
+	s := &Subscriber{
+		ID:      id,
+		Pattern: pattern,
+		Ch:      make(chan *pb.WatchEvent, 64),
 	}
 	w.mu.Lock()
 	w.subscribers = append(w.subscribers, s)
@@ -79,16 +83,39 @@ func (w *WatchService) Subscribe(pattern string) *subscriber {
 }
 
 // Unsubscribe removes a subscriber and closes its channel.
-func (w *WatchService) Unsubscribe(s *subscriber) {
+func (w *WatchService) Unsubscribe(s *Subscriber) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for i, sub := range w.subscribers {
 		if sub == s {
 			w.subscribers = append(w.subscribers[:i], w.subscribers[i+1:]...)
-			sub.close()
+			sub.Close()
 			return
 		}
 	}
+}
+
+// List returns a snapshot of all active subscribers.
+func (w *WatchService) List() []*Subscriber {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	out := make([]*Subscriber, len(w.subscribers))
+	copy(out, w.subscribers)
+	return out
+}
+
+// Kill removes and closes a subscriber by ID. Returns false if not found.
+func (w *WatchService) Kill(id string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for i, sub := range w.subscribers {
+		if sub.ID == id {
+			w.subscribers = append(w.subscribers[:i], w.subscribers[i+1:]...)
+			sub.Close()
+			return true
+		}
+	}
+	return false
 }
 
 // Publish sends an event to all matching subscribers.
@@ -96,8 +123,8 @@ func (w *WatchService) Publish(evt *pb.WatchEvent) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	for _, s := range w.subscribers {
-		if s.matches(evt.Key) {
-			s.send(evt)
+		if s.Matches(evt.Key) {
+			s.Send(evt)
 		}
 	}
 }
@@ -107,7 +134,7 @@ func (w *WatchService) Close() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for _, s := range w.subscribers {
-		s.close()
+		s.Close()
 	}
 	w.subscribers = nil
 }
@@ -151,7 +178,7 @@ func (s *CacheService) Watch(req *pb.WatchRequest, stream pb.CacheService_WatchS
 
 	for {
 		select {
-		case evt, ok := <-sub.ch:
+		case evt, ok := <-sub.Ch:
 			if !ok {
 				return nil
 			}

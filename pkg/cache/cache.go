@@ -16,8 +16,8 @@ import (
 type EvictionPolicy string
 
 const (
-	EvictionNone EvictionPolicy = "none"  // return ErrMaxKeysReached when full
-	EvictionLRU  EvictionPolicy = "lru"   // evict least recently used when full
+	EvictionNone EvictionPolicy = "none" // return ErrMaxKeysReached when full
+	EvictionLRU  EvictionPolicy = "lru"  // evict least recently used when full
 )
 
 type Item struct {
@@ -36,12 +36,12 @@ type Cache struct {
 	cleanupInterval time.Duration
 	wg              sync.WaitGroup
 
-	maxKeys         int // max cache keys (0 = unlimited)
-	maxValueSize    int // max value size in bytes (0 = unlimited)
-	evictionPolicy  EvictionPolicy
-	lruMu           sync.Mutex
-	lruList         *list.List           // front = most recent, back = evict candidate
-	lruElements     map[string]*list.Element // key -> list element
+	maxKeys        int // max cache keys (0 = unlimited)
+	maxValueSize   int // max value size in bytes (0 = unlimited)
+	evictionPolicy EvictionPolicy
+	lruMu          sync.Mutex
+	lruList        *list.List               // front = most recent, back = evict candidate
+	lruElements    map[string]*list.Element // key -> list element
 
 	logger *zap.Logger
 }
@@ -96,6 +96,64 @@ func NewWithLimits(cleanupInterval time.Duration, maxKeys, maxValueSize int, evi
 	go c.cleanupWorker()
 	go c.sizeMetricsWorker()
 	return c
+}
+
+type CacheStats struct {
+	KeyCount               int    `json:"key_count"`
+	ExpirationHeapSize     int    `json:"expiration_heap_size"`
+	EvictionPolicy         string `json:"eviction_policy"`
+	MaxKeys                int    `json:"max_keys"`
+	MaxValueSize           int    `json:"max_value_size"`
+	ApproximateMemoryBytes int64  `json:"approximate_memory_bytes"`
+}
+
+func (c *Cache) Stats() CacheStats {
+	c.mu.RLock(metrics.LockRead)
+	defer c.mu.RUnlock()
+
+	count := len(c.items)
+	heapSize := c.expirationHeap.Len()
+	memSize := approxKeyValueSize(c.items, count)
+
+	return CacheStats{
+		KeyCount:               count,
+		ExpirationHeapSize:     heapSize,
+		EvictionPolicy:         string(c.evictionPolicy),
+		MaxKeys:                c.maxKeys,
+		MaxValueSize:           c.maxValueSize,
+		ApproximateMemoryBytes: memSize,
+	}
+}
+
+func approxKeyValueSize(items map[string]*Item, count int) int64 {
+	if count == 0 {
+		return 0
+	}
+	if count > 10000 {
+		count = count / 100
+		if count == 0 {
+			count = 1
+		}
+	}
+	var total int64
+	i := 0
+	step := 1
+	if len(items) > 10000 {
+		step = len(items) / count
+		if step < 1 {
+			step = 1
+		}
+	}
+	for k, v := range items {
+		if i%step == 0 {
+			total += int64(len(k) + approxValueSize(v.value))
+		}
+		i++
+	}
+	if len(items) > 10000 && step > 1 {
+		total = total * int64(step)
+	}
+	return total
 }
 
 func (c *Cache) Close() {
