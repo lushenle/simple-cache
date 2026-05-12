@@ -42,3 +42,15 @@ allowed_origins: []
 # Raft snapshot / log compaction（distributed 模式生效）
 snapshot_enabled: true
 snapshot_threshold: 1024
+
+# Leader discovery: node_id → gRPC address mapping（distributed 模式生效）
+# peer_addresses:
+#   n1: ":5051"
+#   n2: ":5052"
+#   n3: ":5053"
+
+# 缓存容量控制
+max_keys: 0 # 最大 key 数，0 = 不限
+max_value_size: 0 # 单 value 最大字节数，0 = 不限
+max_qps: 0 # 每客户端每秒请求数限制，0 = 不限
+eviction_policy: none # 淘汰策略："none"（拒绝写入）或 "lru"（淘汰最近最少使用）

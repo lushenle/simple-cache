@@ -42,8 +42,9 @@ sequenceDiagram
 - HTTP 端点：`POST /raft/install_snapshot`
 
 ## 成员管理
-- HTTP Admin：`/cluster/join`、`/cluster/leave`、`/cluster/peers`
+- HTTP Admin：`/cluster/join`、`/cluster/leave`、`/cluster/peers`、`/cluster/stepdown`
 - 成员变更通过 Raft 日志提交后再生效，并持久化到本地 meta
+- `stepdown` 允许 Leader 主动退位，触发新一轮选举，用于优雅的运维操作
 
 ## 持久化
 - WAL：`{data_dir}/raft-<nodeID>.wal`

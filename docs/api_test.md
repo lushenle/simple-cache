@@ -15,7 +15,7 @@
 ```bash
 curl -X POST http://localhost:8080/v1/test_key \
   -H "Content-Type: application/json" \
-  -d '{"value":{"@type":"type.googleapis.com/google.protobuf.StringValue","value":"test_value"}, "expire":"10m"}'
+  -d '{"value": "test_value", "expire": "10m"}'
 ```
 
 成功响应：
@@ -33,7 +33,7 @@ curl -X GET http://localhost:8080/v1/test_key
 
 成功响应：
 ```json
-{"value":{"@type":"type.googleapis.com/google.protobuf.StringValue", "value":"test_value"}, "found":true}
+{"value":"test_value", "found":true}
 ```
 
 ### 3. 设置键过期 (Expire)
@@ -65,7 +65,7 @@ curl -X POST http://localhost:8080/v1/test_key/expire \
 ```bash
 curl -X POST http://localhost:8080/v1/delete_test \
   -H "Content-Type: application/json" \
-  -d '{"value":{"@type":"type.googleapis.com/google.protobuf.StringValue","value":"to_be_deleted"}}'
+  -d '{"value": "to_be_deleted"}'
 ```
 
 然后使用DELETE请求删除：
@@ -101,13 +101,13 @@ curl -X GET "http://localhost:8080/v1/search/test.*/REGEX"
 
 > **注意**：路径参数中的 `mode` 值由网关按 proto enum 名称解析，必须使用大写枚举名（如 `REGEX`）或对应数字（如 `1`），小写值（如 `regex`）将导致 `InvalidArgument` 错误。
 
-也支持 query string 方式（proto 中 `get: "/v1/search"` 绑定）：
+也支持 query string 方式：
 ```bash
 # 通配符搜索
 curl -X GET "http://localhost:8080/v1/search?pattern=test_*"
 
-# 正则搜索（mode=1 对应 REGEX 枚举值）
-curl -X GET "http://localhost:8080/v1/search?pattern=test.*&mode=1"
+# 正则搜索（mode 参数接受 "REGEX" 或 "1"）
+curl -X GET "http://localhost:8080/v1/search?pattern=test.*&mode=REGEX"
 ```
 
 ## 数据持久化
@@ -162,9 +162,14 @@ curl -X POST http://localhost:8080/v1/load \
 curl -X GET http://localhost:8080/healthz
 ```
 
-示例响应：
+single 模式示例响应：
 ```json
-{"status":"ok","mode":"single","ready":true,"role":"single"}
+{"status":"ok","mode":"single","ready":true,"role":"single","grpc_addr":":5051"}
+```
+
+distributed 模式示例响应：
+```json
+{"status":"ok","mode":"distributed","ready":true,"role":"leader","leader_id":"n1","leader_grpc_addr":":5051","grpc_addr":":5051","details":{...}}
 ```
 
 ## 集群状态
@@ -173,18 +178,56 @@ curl -X GET http://localhost:8080/healthz
 curl -X GET http://localhost:8080/readyz
 ```
 
-single 模式示例响应：
+single 模式示例响应（HTTP 200）：
 ```json
-{"status":"ok","mode":"single","ready":true,"role":"single"}
+{"status":"ok","mode":"single","ready":true,"role":"single","grpc_addr":":5051"}
 ```
 
 distributed follower 示例响应（HTTP 503）：
 ```json
-{"status":"not_ready","mode":"distributed","ready":false,"role":"follower","leader_id":"node-1"}
+{"status":"not_ready","mode":"distributed","ready":false,"role":"follower","leader_id":"n1","leader_grpc_addr":":5051","grpc_addr":":5052"}
 ```
 
 ```bash
 curl -X GET http://localhost:8080/cluster/peers
+```
+
+### 集群管理
+
+```bash
+# 加入节点
+curl -X POST http://localhost:8080/cluster/join \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Token: your-token" \
+  -d '{"id":"n4","addr":"http://127.0.0.1:9093"}'
+
+# 移除节点
+curl -X POST http://localhost:8080/cluster/leave \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Token: your-token" \
+  -d '{"addr":"http://127.0.0.1:9093"}'
+
+# Leader 主动退位
+curl -X POST http://localhost:8080/cluster/stepdown \
+  -H "X-Api-Token: your-token"
+```
+
+### 流式批量写入
+
+```bash
+# 批量写入（gRPC streaming，REST 网关自动映射）
+curl -X POST http://localhost:8080/v1/batch-set \
+  -H "Content-Type: application/json" \
+  -d '{"key":"batch:1","value":"v1","expire":"10m"}
+{"key":"batch:2","value":"v2","expire":"10m"}'
+```
+
+### 键变更订阅
+
+```bash
+# 订阅所有 key 的变更事件（gRPC server-streaming）
+# REST 网关映射为 SSE 风格的长连接
+curl -X GET "http://localhost:8080/v1/watch?pattern=*"
 ```
 
 > 如配置了 `auth_token`，请为写接口、`/cluster/*` 以及 dump/load 请求加上 `X-Api-Token` 或 `Authorization: Bearer <token>` 头。
