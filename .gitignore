@@ -5,3 +5,5 @@ sync.sh
 config.yaml
 .trae
 .codegrow
+bin/
+.claude

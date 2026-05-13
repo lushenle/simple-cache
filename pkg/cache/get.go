@@ -47,7 +47,8 @@ func (c *Cache) handleExpiredKey(key string) (any, bool) {
 
 	if !item.expiration.IsZero() && time.Now().After(item.expiration) {
 		// Use delInternal for complete cleanup (heap + prefixTree + items)
-		c.delLRU(key); c.delInternal(key)
+		c.delLRU(key)
+		c.delInternal(key)
 		return "", false
 	}
 

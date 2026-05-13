@@ -65,3 +65,53 @@
 
 ## API 文档
 - `GET /api/docs/` 内嵌 Swagger UI
+
+## Docker 部署
+
+### 单节点
+
+```bash
+docker run -d \
+  --name simple-cache \
+  -p 8080:8080 -p 5051:5051 -p 9090:9090 -p 2112:2112 \
+  -v $(pwd)/config.yaml:/config.yaml:ro \
+  -v simple-cache-data:/data \
+  ishenle/simple-cache:v0.1
+```
+
+### 三节点集群
+
+```bash
+# 使用 docker-compose
+docker compose up -d
+
+# 访问管理后台
+open http://localhost:8080/admin/
+```
+
+`docker-compose.yml` 启动 3 个节点，配置文件位于 `docker/` 目录。各服务端口映射：
+
+| 容器 | HTTP | gRPC | Raft | Metrics |
+|------|------|------|------|---------|
+| node1 | 8080 | 5051 | 9090 | 2112 |
+| node2 | 8081 | 5052 | 9091 | 2113 |
+| node3 | 8082 | 5053 | 9092 | 2114 |
+
+### Dockerfile 多阶段构建
+
+```
+Node 22 Alpine    →  npm ci + npm run build (前端 SPA)
+Go 1.24 Alpine    →  go build (含 embed 前端)
+Alpine 3.21       →  最终运行镜像 (~30 MB)
+```
+
+### 管理后台
+
+Web 管理后台随二进制一同发布，通过 `http://<http_addr>/admin/` 访问。首次使用需输入 `auth_token` 进行认证。
+
+- Dashboard: `http://localhost:8080/admin/`
+- Cluster: `http://localhost:8080/admin/#/cluster`
+- Cache Browser: `http://localhost:8080/admin/#/cache`
+- Subscriptions: `http://localhost:8080/admin/#/subscriptions`
+- Operations: `http://localhost:8080/admin/#/operations`
+- Settings: `http://localhost:8080/admin/#/settings`

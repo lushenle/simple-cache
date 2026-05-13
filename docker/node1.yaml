@@ -1,0 +1,28 @@
+mode: distributed
+node_id: n1
+grpc_addr: ":5051"
+http_addr: ":8080"
+raft_http_addr: ":9090"
+metrics_addr: ":2112"
+peers:
+  - "http://node1:9090"
+  - "http://node2:9090"
+  - "http://node3:9090"
+peer_addresses:
+  n1: "node1:5051"
+  n2: "node2:5051"
+  n3: "node3:5051"
+heartbeat_ms: 200
+election_ms: 5000
+hot_reload: false
+load_on_startup: false
+dump_on_shutdown: false
+dump_format: binary
+data_dir: data
+auth_token: ""
+enable_tls: false
+tls_cert_file: ""
+tls_key_file: ""
+allowed_origins: []
+snapshot_enabled: true
+snapshot_threshold: 1024

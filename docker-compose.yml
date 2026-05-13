@@ -1,0 +1,63 @@
+services:
+  node1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: simple-cache:latest
+    container_name: simple-cache-node1
+    ports:
+      - "8080:8080"   # HTTP gateway + admin UI
+      - "5051:5051"   # gRPC
+      - "9090:9090"   # Raft transport
+      - "2112:2112"   # Metrics / pprof
+    volumes:
+      - ./docker/node1.yaml:/config.yaml:ro
+      - node1-data:/data
+    restart: unless-stopped
+    networks:
+      - cache-net
+
+  node2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: simple-cache:latest
+    container_name: simple-cache-node2
+    ports:
+      - "8081:8080"   # HTTP gateway + admin UI
+      - "5052:5051"   # gRPC
+      - "9091:9090"   # Raft transport
+      - "2113:2112"   # Metrics
+    volumes:
+      - ./docker/node2.yaml:/config.yaml:ro
+      - node2-data:/data
+    restart: unless-stopped
+    networks:
+      - cache-net
+
+  node3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: simple-cache:latest
+    container_name: simple-cache-node3
+    ports:
+      - "8082:8080"   # HTTP gateway + admin UI
+      - "5053:5051"   # gRPC
+      - "9092:9090"   # Raft transport
+      - "2114:2112"   # Metrics
+    volumes:
+      - ./docker/node3.yaml:/config.yaml:ro
+      - node3-data:/data
+    restart: unless-stopped
+    networks:
+      - cache-net
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+
+networks:
+  cache-net:
+    driver: bridge

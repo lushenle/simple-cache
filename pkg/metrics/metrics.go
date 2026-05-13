@@ -224,7 +224,7 @@ func Init() {
 			RequestDuration,
 			KeysTotal,
 			ExpirationHeapSize,
-				EvictionsTotal,
+			EvictionsTotal,
 			OperationDuration,
 			OperationCount,
 			CacheSize,
@@ -315,16 +315,17 @@ func SetRaftLastApplied(v uint64)                 { RaftLastApplied.Set(float64(
 func IncRaftLeaderChanges()                       { RaftLeaderChanges.Inc() }
 func ObserveAppendEntriesLatency(d time.Duration) { RaftAppendEntriesLatency.Observe(d.Seconds()) }
 func SetPeersTotal(n int)                         { PeersTotal.Set(float64(n)) }
-func SetRaftPendingEntries(n int)              { RaftPendingEntries.Set(float64(n)) }
-func SetRaftSnapshotAge(seconds float64)        { RaftSnapshotAge.Set(seconds) }
+func SetRaftPendingEntries(n int)                 { RaftPendingEntries.Set(float64(n)) }
+func SetRaftSnapshotAge(seconds float64)          { RaftSnapshotAge.Set(seconds) }
 
 // Persistence metrics helpers
 func IncPersistenceOp(op, status string) { PersistenceOpTotal.WithLabelValues(op, status).Inc() }
+
 func ObservePersistenceDuration(op string, d float64) {
 	PersistenceDuration.WithLabelValues(op).Observe(d)
 }
 func SetDumpKeys(n int64) { DumpKeysGauge.Set(float64(n)) }
-func IncEvictions() { EvictionsTotal.Inc() }
+func IncEvictions()       { EvictionsTotal.Inc() }
 
 func SetLoadKeys(loaded, skipped int64) {
 	LoadKeysGauge.WithLabelValues("loaded").Set(float64(loaded))

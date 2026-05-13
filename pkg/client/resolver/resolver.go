@@ -88,7 +88,7 @@ func (b *Builder) Scheme() string { return Scheme }
 // simpleCacheResolver implements gresolver.Resolver.
 type simpleCacheResolver struct {
 	mu       sync.Mutex
-	peers    []string        // gRPC addresses of all known cluster nodes
+	peers    []string // gRPC addresses of all known cluster nodes
 	cc       gresolver.ClientConn
 	client   *http.Client
 	interval time.Duration

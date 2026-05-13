@@ -1,3 +1,26 @@
+.PHONY: frontend-install
+frontend-install:
+	cd frontend && npm ci
+
+.PHONY: frontend-build
+frontend-build:
+	cd frontend && npm run build
+
+.PHONY: frontend-embed
+frontend-embed:
+	rm -rf pkg/cmd/admin-dist
+	cp -r frontend/dist pkg/cmd/admin-dist
+
+.PHONY: frontend
+frontend: frontend-install frontend-build frontend-embed
+
+.PHONY: build
+build:
+	go build -o bin/simple-cache ./pkg/cmd/
+
+.PHONY: build-with-ui
+build-with-ui: frontend build
+
 .PHONY: fmt
 fmt:
 	gofumpt -l -w .

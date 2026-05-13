@@ -68,7 +68,7 @@ type Client struct {
 	// ---- configuration ----
 	retryCount    int
 	checkInterval time.Duration
-	dialOpts     []grpc.DialOption
+	dialOpts      []grpc.DialOption
 
 	// ---- lifecycle ----
 	stopCh chan struct{}
@@ -81,8 +81,8 @@ type ClientOption func(*clientOpts)
 type clientOpts struct {
 	retryCount    int
 	checkInterval time.Duration
-	dialOpts     []grpc.DialOption
-	httpClient   *http.Client
+	dialOpts      []grpc.DialOption
+	httpClient    *http.Client
 }
 
 func defaultOpts() *clientOpts {
@@ -177,9 +177,9 @@ func NewCluster(ctx context.Context, nodes []NodeSpec, opts ...ClientOption) (*C
 		nodeMap:       make(map[string]int),
 		retryCount:    o.retryCount,
 		checkInterval: o.checkInterval,
-		dialOpts:     o.dialOpts,
-		httpClient:   o.httpClient,
-		stopCh:       make(chan struct{}),
+		dialOpts:      o.dialOpts,
+		httpClient:    o.httpClient,
+		stopCh:        make(chan struct{}),
 	}
 	for i := range c.nodes {
 		if c.nodes[i].ID != "" {
@@ -693,6 +693,7 @@ func ensureConnected(ctx context.Context, conn *grpc.ClientConn) error {
 		}
 	}
 }
+
 // BatchSetStream performs a streaming batch set of multiple key-value pairs.
 // It uses a gRPC stream which is more efficient than calling Set() in a loop,
 // especially over high-latency connections.
@@ -730,6 +731,7 @@ func (c *Client) BatchSetStream(ctx context.Context, items map[string]string, tt
 	}
 	return int(resp.SuccessCount), int(resp.ErrorCount), nil
 }
+
 // Watch subscribes to cache change events matching the given pattern.
 // Events are sent on the returned channel until the context is cancelled
 // or the connection is closed. The caller must consume from the channel
@@ -785,5 +787,7 @@ func (c *Client) Watch(ctx context.Context, pattern string) (<-chan *pb.WatchEve
 // Sentinel errors
 // ---------------------------------------------------------------------------
 
-var ErrNoLeader = errors.New("no cluster leader reachable")
-var ErrNoClient = errors.New("client is not connected")
+var (
+	ErrNoLeader = errors.New("no cluster leader reachable")
+	ErrNoClient = errors.New("client is not connected")
+)

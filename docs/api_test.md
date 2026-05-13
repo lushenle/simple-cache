@@ -212,12 +212,16 @@ curl -X POST http://localhost:8080/cluster/stepdown \
   -H "X-Api-Token: your-token"
 ```
 
+> 以上管理接口同时支持 `X-Api-Token` 和 `Authorization: Bearer <token>` 两种认证头格式。
+
 ### 流式批量写入
 
 ```bash
 # 批量写入（gRPC streaming，REST 网关自动映射）
+# 写入时需携带 auth token（如已配置）
 curl -X POST http://localhost:8080/v1/batch-set \
   -H "Content-Type: application/json" \
+  -H "X-Api-Token: your-token" \
   -d '{"key":"batch:1","value":"v1","expire":"10m"}
 {"key":"batch:2","value":"v2","expire":"10m"}'
 ```
@@ -231,6 +235,75 @@ curl -X GET "http://localhost:8080/v1/watch?pattern=*"
 ```
 
 > 如配置了 `auth_token`，请为写接口、`/cluster/*` 以及 dump/load 请求加上 `X-Api-Token` 或 `Authorization: Bearer <token>` 头。
+
+## 管理后台
+
+### 访问管理后台
+
+```bash
+# 浏览器打开管理后台
+open http://localhost:8080/admin/
+```
+
+### 认证
+
+首次访问时输入 `auth_token`（对应 `config.yaml` 中的 `auth_token` 配置项）。Token 存入浏览器 `localStorage`，后续请求自动携带。
+
+### Admin API 测试
+
+```bash
+# 聚合节点状态
+curl -X GET http://localhost:8080/admin/api/status \
+  -H "x-api-token: your-token"
+
+# 指标摘要
+curl -X GET http://localhost:8080/admin/api/metrics/summary \
+  -H "x-api-token: your-token"
+
+# 当前配置（不含 token）
+curl -X GET http://localhost:8080/admin/api/config \
+  -H "x-api-token: your-token"
+
+# 活跃订阅列表
+curl -X GET http://localhost:8080/admin/api/subscriptions \
+  -H "x-api-token: your-token"
+
+# 终止订阅
+curl -X DELETE http://localhost:8080/admin/api/subscriptions/<subscription-id> \
+  -H "x-api-token: your-token"
+
+# 集群节点详情
+curl -X GET http://localhost:8080/admin/api/cluster/nodes \
+  -H "x-api-token: your-token"
+
+# Raft 状态
+curl -X GET http://localhost:8080/admin/api/raft \
+  -H "x-api-token: your-token"
+
+# Key 统计
+curl -X GET http://localhost:8080/admin/api/keys/stats \
+  -H "x-api-token: your-token"
+
+# Plain-value Set（无需感知 protobuf Any 编码）
+curl -X POST http://localhost:8080/admin/api/set/mykey \
+  -H "Content-Type: application/json" \
+  -H "x-api-token: your-token" \
+  -d '{"value": "hello", "expire": "10m"}'
+
+# Watch SSE 流（token 通过 query param 传递）
+curl -X GET "http://localhost:8080/admin/api/watch?pattern=*&token=your-token"
+```
+
+### 语言切换
+
+管理后台默认根据浏览器语言自动选择中文/英文。可手动切换：
+
+```javascript
+// 在浏览器 Console 中
+localStorage.setItem('locale', 'zh');  // 切换中文
+localStorage.setItem('locale', 'en');  // 切换英文
+location.reload();
+```
 
 ## API 文档
 

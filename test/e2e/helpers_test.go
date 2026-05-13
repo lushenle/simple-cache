@@ -86,7 +86,7 @@ func startNodeProcess(t *testing.T, root string, spec nodeConfig) *nodeProcess {
 	t.Helper()
 
 	configPath := writeConfig(t, spec.cfg, t.TempDir(), spec.name)
-	cmd := exec.Command("go", "run", "./pkg/cmd/main.go")
+	cmd := exec.Command("go", "run", "./pkg/cmd/")
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "CONFIG_PATH="+configPath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

@@ -39,8 +39,8 @@ type GetLeaderResponse struct {
 
 // simpleRateLimiter implements a token-bucket rate limiter per client.
 type simpleRateLimiter struct {
-	mu          sync.Mutex
-	tokens      map[string]struct {
+	mu     sync.Mutex
+	tokens map[string]struct {
 		count    int
 		expireAt time.Time
 	}
@@ -53,7 +53,7 @@ func newSimpleRateLimiter(maxQPS int) *simpleRateLimiter {
 		return nil
 	}
 	return &simpleRateLimiter{
-		tokens:  make(map[string]struct {
+		tokens: make(map[string]struct {
 			count    int
 			expireAt time.Time
 		}),
@@ -109,8 +109,8 @@ type CacheService struct {
 	fsm      *fsm.FSM
 	node     *raft.Node
 	nodeID   string
-	grpcAddr string                 // this node's gRPC address
-	peerMap  map[string]string      // nodeID → gRPC address for all known peers
+	grpcAddr string            // this node's gRPC address
+	peerMap  map[string]string // nodeID → gRPC address for all known peers
 	rl       *simpleRateLimiter
 	watchSvc *WatchService
 }

@@ -61,6 +61,14 @@ func requiresHTTPAuth(r *http.Request) bool {
 	if strings.HasPrefix(r.URL.Path, "/cluster/") {
 		return true
 	}
+	if strings.HasPrefix(r.URL.Path, "/admin/api/") {
+		// SSE watch endpoint handles auth via query param since
+		// EventSource does not support custom headers.
+		if r.URL.Path == "/admin/api/watch" {
+			return false
+		}
+		return true
+	}
 	switch r.URL.Path {
 	case "/v1/load", "/v1/dump", "/v1":
 		return true

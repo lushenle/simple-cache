@@ -245,6 +245,16 @@ func (n *Node) resetElectionDeadline() {
 	atomic.StoreInt64(&n.electionDeadline, deadline)
 }
 
+// resetElectionDeadlineLocked extends the deadline by the full election
+// timeout without random jitter.  Used after granting a vote to prevent
+// a voter from immediately starting its own election (quiet period).
+func (n *Node) resetElectionDeadlineLocked() {
+	// Use 2x the election timeout to give the new leader ample time
+	// to send heartbeats and stabilise the cluster.
+	deadline := time.Now().Add(2 * n.el).UnixNano()
+	atomic.StoreInt64(&n.electionDeadline, deadline)
+}
+
 func (n *Node) startElection() {
 	n.role.Store(Candidate)
 	metrics.SetRaftRole(n.id, string(Candidate))
@@ -286,6 +296,9 @@ func (n *Node) startElection() {
 			}
 		}
 		n.mu.Unlock()
+		// Send an immediate fast heartbeat (100ms deadline) to suppress
+		// follower elections before doing full log replication.
+		n.fastHeartbeat()
 		n.replicateAll()
 	}
 	n.resetElectionDeadline()
@@ -413,6 +426,16 @@ func (n *Node) onAppendEntries(req AppendEntriesReq) AppendEntriesResp {
 
 	if req.Term > n.term {
 		n.stepDownLocked(req.Term)
+	}
+
+	// If this heartbeat is from ourselves (e.g. the leader sending to its
+	// own Docker service name), just reset the deadline and keep the
+	// current role.  Without this guard, the leader would set its own role
+	// to Follower every heartbeat cycle.
+	if req.LeaderID == n.id && req.Term == n.term {
+		n.resetElectionDeadline()
+		n.mu.Unlock()
+		return AppendEntriesResp{Term: n.term, Success: true, LastLogIndex: n.lastLogIndex}
 	}
 
 	n.leaderID.Store(req.LeaderID)
@@ -551,7 +574,7 @@ func (n *Node) onRequestVote(req RequestVoteReq) RequestVoteResp {
 	if n.votedFor == "" || n.votedFor == req.CandidateID {
 		n.votedFor = req.CandidateID
 		_ = n.storage.SaveMeta(n.metaLocked())
-		n.resetElectionDeadline()
+		n.resetElectionDeadlineLocked()
 		return RequestVoteResp{Term: n.term, VoteGranted: true}
 	}
 	return RequestVoteResp{Term: n.term, VoteGranted: false}
@@ -584,6 +607,14 @@ func (n *Node) replicateUntilCommitted(index uint64) error {
 
 func (n *Node) replicateAll() {
 	n.replicateAllWithDeadline(time.Now().Add(time.Second))
+}
+
+// fastHeartbeat sends an immediate lightweight AppendEntries to all peers
+// with a short deadline. It is used right after a leader is elected so that
+// followers reset their election timers before the leader starts full log
+// replication.
+func (n *Node) fastHeartbeat() {
+	n.replicateAllWithDeadline(time.Now().Add(100 * time.Millisecond))
 }
 
 func (n *Node) replicateAllWithDeadline(deadline time.Time) {
@@ -1063,6 +1094,11 @@ func (n *Node) stepDownLocked(term uint64) {
 		w <- applyResult{resp: nil, err: ErrNotLeader{Leader: ""}}
 		close(w)
 		delete(n.applyWaiter, idx)
+		// Use the locked (no-jitter) deadline reset so this node waits the
+		// full election timeout before starting a new election.  This gives
+		// the new leader at least election_ms to send heartbeats and stabilise
+		// the cluster, preventing the perpetual leapfrog cycle.
+		n.resetElectionDeadlineLocked()
 	}
 }
 

@@ -246,6 +246,10 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 
 	mux := http.NewServeMux()
 	mux.Handle("/", grpcMux)
+
+	// Admin API + future SPA
+	adminHandler := server.NewAdminHandler(svr, cfg)
+	adminHandler.Register(mux)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		status := svr.HealthStatus()
 		w.Header().Set("Content-Type", "application/json")
@@ -379,6 +383,11 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 	mux.Handle("/swagger/", http.StripPrefix("/swagger", fileServer))
 	mux.Handle("/api/docs/", http.StripPrefix("/api/docs", fileServer))
 	mux.HandleFunc("/api/docs", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/api/docs/", http.StatusFound) })
+
+	// Admin SPA (embedded static files, no auth required for the HTML/JS bundle).
+	// All data APIs under /admin/api/ require auth.
+	mux.Handle("/admin/", adminSPAHandler())
+	mux.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/admin/", http.StatusFound) })
 
 	c := cors.New(cors.Options{
 		AllowedOrigins: cfg.Get().AllowedOrigins,
