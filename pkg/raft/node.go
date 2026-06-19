@@ -13,6 +13,8 @@ import (
 	"github.com/lushenle/simple-cache/pkg/command"
 	"github.com/lushenle/simple-cache/pkg/metrics"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type Applier interface {
@@ -1210,6 +1212,17 @@ func (n *Node) StepDown() error {
 type ErrNotLeader struct{ Leader string }
 
 func (e ErrNotLeader) Error() string { return "not leader" }
+
+// GRPCStatus implements the GRPCStatus interface so that gRPC serializes
+// ErrNotLeader as codes.FailedPrecondition instead of codes.Unknown.
+// The leader ID is included in the message for client-side redirection.
+func (e ErrNotLeader) GRPCStatus() *status.Status {
+	msg := "not leader"
+	if e.Leader != "" {
+		msg = fmt.Sprintf("not leader, leader is %s", e.Leader)
+	}
+	return status.New(codes.FailedPrecondition, msg)
+}
 
 type ErrCommit struct{}
 

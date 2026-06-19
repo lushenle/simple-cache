@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.24.1-00ADD8?logo=go" alt="Go Version">
+  <img src="https://img.shields.io/badge/Go-1.25.5-00ADD8?logo=go" alt="Go Version">
   <img src="https://img.shields.io/badge/Protocol-gRPC%20%2B%20REST-27A36E?logo=grpc" alt="Protocol">
   <img src="https://img.shields.io/badge/Consensus-Raft%20Protocol-FF6B6B" alt="Raft">
   <img src="https://img.shields.io/badge/Monitoring-Prometheus-E6522C?logo=prometheus" alt="Prometheus">
@@ -933,6 +933,91 @@ curl -X POST http://localhost:8080/cluster/leave \
   -H "Content-Type: application/json" \
   -d '{"addr": "http://127.0.0.1:9093"}'
 ```
+
+---
+
+## Kubernetes Operator
+
+Simple-Cache 提供了 Kubernetes Operator，通过声明式 API 自动管理分布式缓存集群的部署、扩缩容和自愈。
+
+### 安装 Operator
+
+```bash
+# 添加 Helm 仓库
+helm repo add simple-cache https://lushenle.github.io/simple-cache
+helm repo update
+
+# 安装 Operator
+helm install simple-cache-operator simple-cache/simple-cache-operator
+```
+
+### 创建缓存集群
+
+```yaml
+apiVersion: cache.shenle.lu/v1
+kind: CacheCluster
+metadata:
+  name: my-cache
+spec:
+  replicas: 3
+  storage:
+    size: 10Gi
+```
+
+```bash
+kubectl apply -f my-cache.yaml
+kubectl get cacheclusters
+# NAME        REPLICAS   READY   LEADER        AGE
+# my-cache    3          3       my-cache-0    30s
+```
+
+### 特性
+
+- **声明式管理** — 通过 `CacheCluster` CR 定义集群，Operator 自动创建 StatefulSet、Service、ConfigMap
+- **Raft 共识** — 每个 Pod 运行一个 simple-cache 实例，通过 Raft 协议保证数据一致性
+- **滚动更新** — StatefulSet 有序更新，支持 partition 金丝雀发布
+- **扩缩容** — 修改 `spec.replicas` 即可扩缩容（支持 1/3/5 节点）
+- **持久存储** — 每个 Pod 独立 PVC，Raft snapshot + WAL 保证数据不丢失
+- **监控集成** — 自动创建 Prometheus ServiceMonitor
+
+### Operator 项目结构
+
+```
+operator/
+├── cmd/main.go                     # Operator 入口
+├── api/v1/                         # CRD 类型定义
+│   ├── cachecluster_types.go
+│   └── groupversion_info.go
+├── internal/controller/            # Controller 实现
+│   ├── cachecluster_controller.go  # Reconcile 主逻辑
+│   ├── service.go                  # Headless + Client Service
+│   ├── configmap.go               # 动态配置生成
+│   ├── statefulset.go             # StatefulSet 构建
+│   └── status.go                  # 集群状态采集
+├── config/
+│   ├── crd/bases/                  # CRD YAML
+│   ├── rbac/                       # RBAC 权限
+│   └── samples/                    # 示例 CR
+├── helm/simple-cache-operator/     # Helm Chart
+└── Dockerfile
+```
+
+### 开发
+
+```bash
+cd operator
+
+# 生成 CRD 和 RBAC
+make manifests
+
+# 编译
+make build
+
+# 运行测试
+make test
+```
+
+> 详细设计参见 [docs/k8s-operator-design.md](docs/k8s-operator-design.md)
 
 ---
 

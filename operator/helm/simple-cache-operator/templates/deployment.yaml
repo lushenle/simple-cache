@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "simple-cache-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "simple-cache-operator.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.operator.replicas }}
+  selector:
+    matchLabels:
+      {{- include "simple-cache-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "simple-cache-operator.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "simple-cache-operator.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+      - name: operator
+        image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
+        imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
+        command:
+        - /manager
+        args:
+        - --metrics-bind-address=:{{ .Values.operator.metrics.port }}
+        - --health-probe-bind-address=:{{ .Values.operator.probe.port }}
+        {{- if .Values.leaderElection.enabled }}
+        - --leader-elect
+        {{- end }}
+        ports:
+        - name: metrics
+          containerPort: {{ .Values.operator.metrics.port }}
+        - name: probe
+          containerPort: {{ .Values.operator.probe.port }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: probe
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: probe
+        resources:
+          {{- toYaml .Values.operator.resources | nindent 12 }}

@@ -1,0 +1,65 @@
+{{- if .Values.createDefaultCluster }}
+apiVersion: cache.shenle.lu/v1
+kind: CacheCluster
+metadata:
+  name: {{ .Release.Name }}-default
+  labels:
+    {{- include "simple-cache-operator.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.defaultCluster.replicas }}
+  image: {{ .Values.defaultCluster.image }}
+  imagePullPolicy: {{ .Values.defaultCluster.imagePullPolicy }}
+  cache:
+    maxKeys: {{ .Values.defaultCluster.cache.maxKeys }}
+    maxValueSize: {{ .Values.defaultCluster.cache.maxValueSize }}
+    evictionPolicy: {{ .Values.defaultCluster.cache.evictionPolicy }}
+    maxQPS: {{ .Values.defaultCluster.cache.maxQPS }}
+  raft:
+    heartbeatMs: {{ .Values.defaultCluster.raft.heartbeatMs }}
+    electionMs: {{ .Values.defaultCluster.raft.electionMs }}
+    snapshotEnabled: {{ .Values.defaultCluster.raft.snapshotEnabled }}
+    snapshotThreshold: {{ .Values.defaultCluster.raft.snapshotThreshold }}
+  persistence:
+    dumpOnShutdown: {{ .Values.defaultCluster.persistence.dumpOnShutdown }}
+    loadOnStartup: {{ .Values.defaultCluster.persistence.loadOnStartup }}
+    dumpFormat: {{ .Values.defaultCluster.persistence.dumpFormat }}
+    dataDir: {{ .Values.defaultCluster.persistence.dataDir }}
+  storage:
+    size: {{ .Values.defaultCluster.storage.size }}
+    storageClassName: {{ .Values.defaultCluster.storage.storageClassName }}
+  auth:
+    enabled: {{ .Values.defaultCluster.auth.enabled }}
+  tls:
+    enabled: {{ .Values.defaultCluster.tls.enabled }}
+  monitoring:
+    serviceMonitor:
+      enabled: {{ .Values.defaultCluster.monitoring.serviceMonitor.enabled }}
+      interval: {{ .Values.defaultCluster.monitoring.serviceMonitor.interval }}
+{{- end }}
+	  {{- with .Values.defaultCluster.resources }}
+	  resources:
+	    {{- toYaml . | nindent 4 }}
+	  {{- end }}
+	  {{- with .Values.defaultCluster.affinity }}
+	  affinity:
+	    {{- toYaml . | nindent 4 }}
+	  {{- end }}
+	  {{- with .Values.defaultCluster.tolerations }}
+	  tolerations:
+	    {{- toYaml . | nindent 4 }}
+	  {{- end }}
+	  {{- with .Values.defaultCluster.nodeSelector }}
+	  nodeSelector:
+	    {{- toYaml . | nindent 4 }}
+	  {{- end }}
+	  {{- with .Values.defaultCluster.topologySpreadConstraints }}
+	  topologySpreadConstraints:
+	    {{- toYaml . | nindent 4 }}
+	  {{- end }}
+	  {{- with .Values.defaultCluster.terminationGracePeriodSeconds }}
+	  terminationGracePeriodSeconds: {{ . }}
+	  {{- end }}
+	  {{- with .Values.defaultCluster.extraEnv }}
+	  extraEnv:
+	    {{- toYaml . | nindent 4 }}
+	  {{- end }}
