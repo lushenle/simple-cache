@@ -32,6 +32,6 @@ jobs:
         uses: helm/chart-releaser-action@v1
         with:
           charts_dir: operator/helm
-          charts_repo_url: https://lushenle.github.io/simple-cache
+          charts_repo_url: https://shenle.lu/simple-cache
         env:
           CR_TOKEN: ${{ secrets.CHART_RELEASER_TOKEN }}
