@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package pb;
+
+option go_package = "github.com/lushenle/simple-cache/pkg/pb";
+
+message ResetRequest {}
+
+message ResetResponse {
+  bool success = 1;
+  int32 keys_cleared = 2;
+}

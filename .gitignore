@@ -1,0 +1,10 @@
+.idea
+.DS_Store
+sync.sh
+.vscode
+config.yaml
+.trae
+.codegrow
+bin/
+.claude
+

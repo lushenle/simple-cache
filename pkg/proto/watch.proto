@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package pb;
+
+import "google/protobuf/any.proto";
+
+option go_package = "github.com/lushenle/simple-cache/pkg/pb";
+
+// WatchRequest subscribes to key change events matching an optional pattern.
+message WatchRequest {
+  // Pattern filters which keys to watch. Empty string watches all keys.
+  // Supports wildcard patterns like "user:*".
+  string pattern = 1;
+}
+
+// WatchEventType indicates the type of change.
+enum WatchEventType {
+  EVENT_SET = 0;
+  EVENT_DEL = 1;
+  EVENT_EXPIRE = 2;
+}
+
+// WatchEvent is sent to the client when a matching key changes.
+message WatchEvent {
+  WatchEventType type = 1;
+  string key = 2;
+  google.protobuf.Any value = 3;  // only set for EVENT_SET; nil for DEL/EXPIRE
+}

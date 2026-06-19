@@ -1,0 +1,1288 @@
+# Simple-Cache
+
+<p align="center">
+  <strong>基于 Raft 共识的分布式内存缓存系统</strong>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Go-1.25.5-00ADD8?logo=go" alt="Go Version">
+  <img src="https://img.shields.io/badge/Protocol-gRPC%20%2B%20REST-27A36E?logo=grpc" alt="Protocol">
+  <img src="https://img.shields.io/badge/Consensus-Raft%20Protocol-FF6B6B" alt="Raft">
+  <img src="https://img.shields.io/badge/Monitoring-Prometheus-E6522C?logo=prometheus" alt="Prometheus">
+  <img src="https://img.shields.io/badge/UI-React%2018-61DAFB?logo=react" alt="React">
+  <img src="https://img.shields.io/badge/i18n-EN%20%7C%20ZH-FF6B6B" alt="i18n">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
+</p>
+
+---
+
+## 目录
+
+- [简介](#简介)
+- [特性](#特性)
+- [系统架构](#系统架构)
+- [数据流程](#数据流程)
+- [快速开始](#快速开始)
+  - [环境要求](#环境要求)
+  - [单机模式](#单机模式)
+  - [分布式模式](#分布式模式)
+- [项目结构](#项目结构)
+- [API 参考](#api-参考)
+  - [gRPC 接口](#grpc-接口)
+  - [Admin API](#admin-api)
+  - [REST 接口](#rest-接口)
+  - [集群管理接口](#集群管理接口)
+  - [运维接口](#运维接口)
+- [客户端 SDK](#客户端-sdk)
+  - [安装](#安装)
+  - [基本使用](#基本使用)
+  - [批量操作](#批量操作)
+  - [搜索](#搜索)
+  - [过期管理](#过期管理)
+- [管理后台](#管理后台)
+- [配置说明](#配置说明)
+- [分布式部署指南](#分布式部署指南)
+  - [Docker 部署](#docker-部署)
+- [运维手册](docs/runbook.md)
+- [监控指标](#监控指标)
+- [开发指南](#开发指南)
+  - [构建](#构建)
+  - [测试](#测试)
+  - [前端开发](#前端开发)
+  - [Proto 代码生成](#proto-代码生成)
+  - [代码格式化](#代码格式化)
+- [设计详解](#设计详解)
+  - [缓存数据结构](#缓存数据结构)
+  - [Raft 共识实现](#raft-共识实现)
+  - [过期与清理机制](#过期与清理机制)
+  - [搜索机制](#搜索机制)
+  - [日志系统](#日志系统)
+  - [数据持久化](#数据持久化)
+
+---
+
+## 简介
+
+**Simple-Cache** 是一个使用 Go 语言实现的分布式内存缓存系统。它采用经典的 **Command + FSM + Raft** 架构模式，通过自研的 Raft 共识算法保证分布式环境下的数据一致性。系统同时提供 gRPC 和 REST 双协议接口，内嵌 Swagger UI，集成 Prometheus 监控，支持单机和分布式两种运行模式。
+
+## 特性
+
+- **双协议支持** — gRPC 原生接口 + REST HTTP（通过 grpc-gateway 自动转换）
+- **Raft 共识** — 自研轻量级 Raft 实现，支持 Leader 选举、日志复制、多数派提交
+- **单机/分布式透明切换** — 通过配置文件一个字段即可切换模式，上层业务无感知
+- **灵活的 Key 搜索** — 支持通配符（基于 Radix Tree 前缀搜索）和正则表达式两种匹配模式
+- **TTL 过期机制** — 支持 Set 时设置 TTL，也支持通过 `ExpireKey` 独立设置/移除过期时间
+- **智能清理** — 主动清理 + 惰性删除双重策略，时间预算控制避免阻塞
+- **动态集群管理** — 通过 HTTP API 动态增删节点
+- **配置热重载** — 支持配置文件轮询热更新；当前主要用于运行时配置分发，网络监听地址仍需重启生效
+- **可观测性** — Prometheus 指标（独立端口）+ 结构化日志（zap + lumberjack 日志轮转）
+- **API 文档** — 内嵌 Swagger UI，启动后访问 `/api/docs/` 即可查看
+- **优雅关闭** — 完整的 9 步优雅关闭流程（gRPC → Gateway → Raft → Dump → Cache → Watch → Config → Metrics → Logger）
+- **数据持久化** — 支持将缓存数据 Dump 到本地磁盘（二进制/JSON 双格式）；single 模式支持自动/手动 Load 恢复，distributed 模式依赖 WAL replay
+- **客户端 SDK** — 封装完整的 gRPC 客户端，提供友好的 Go API（包括批量操作）
+- **Web 管理后台** — React 18 + TypeScript 内嵌 SPA（`/admin/`），提供仪表盘、集群管理、缓存浏览、订阅管理、运维操作、系统设置六大模块
+- **国际化** — 管理后台支持中英文切换
+- **自动 Leader 切主** — Cluster 模式 client 自动发现 Leader，遇到 `not leader` 错误自动重试并切主
+- **gRPC Name Resolver** — 内置 `simplecache://` URI scheme resolver，与 gRPC 框架原生集成
+
+---
+
+## 系统架构
+
+### 整体架构图
+
+![当前架构总览](docs/assets/current-architecture-overview.svg)
+
+```mermaid
+graph TB
+    subgraph 客户端
+        CLI["CLI / SDK"]
+        HTTP_C["HTTP Client"]
+    end
+
+    subgraph "Simple-Cache 节点"
+        subgraph "接入与安全层"
+            GW["HTTP Gateway<br/>:8080<br/>(grpc-gateway + Swagger)"]
+            ADMIN["Admin SPA<br/>:8080/admin/<br/>(React 18 + TypeScript)"]
+            GRPC["gRPC Server<br/>:5051<br/>(可启用 TLS)"]
+            AUTH["Auth / CORS<br/>(Token + Middleware)"]
+            METRICS["Metrics Server<br/>:2112<br/>(Prometheus)"]
+        end
+
+        subgraph "服务层"
+            SVC["CacheService<br/>(命令分发 + Probe)"]
+            ADMIN_API["Admin API<br/>(/admin/api/*)"]
+        end
+
+        subgraph "共识层"
+            FSM["FSM<br/>(Apply + Snapshot/Restore)"]
+            RAFT["Raft Node<br/>(Leader 选举 + 日志复制 + InstallSnapshot)"]
+            STORE["WAL + Snapshot Storage<br/>(持久化日志与压缩)"]
+        end
+
+        subgraph "缓存引擎"
+            MAP["HashMap<br/>O(1) 读写"]
+            TREE["Radix Tree<br/>前缀搜索"]
+            HEAP["Min-Heap<br/>过期管理"]
+            PERSIST["Dump / Load<br/>(single 模式)"]
+        end
+    end
+
+    CLI -->|gRPC| GRPC
+    HTTP_C -->|REST| GW
+    GW --> AUTH
+    GRPC --> AUTH
+    AUTH --> SVC
+    SVC -->|单机模式写/读| FSM
+    SVC -->|分布式写| RAFT
+    SVC -->|分布式读仅 Leader| MAP
+    RAFT -->|WAL / Snapshot| STORE
+    RAFT -->|提交后应用| FSM
+    FSM --> MAP
+    FSM --> TREE
+    FSM --> HEAP
+    FSM --> PERSIST
+```
+
+### 模块职责
+
+| 模块 | 路径 | 职责 |
+|------|------|------|
+| `cache` | `pkg/cache/` | 缓存引擎核心：CRUD、TTL 过期、前缀/正则搜索、指标采集 |
+| `server` | `pkg/server/` | gRPC 服务层：接收请求、命令分发、模式切换 |
+| `raft` | `pkg/raft/` | Raft 共识实现：Leader 选举、日志复制、多数派提交 |
+| `fsm` | `pkg/fsm/` | 有限状态机：将 Raft 日志应用到缓存 |
+| `command` | `pkg/command/` | 命令定义（含 Search）与编解码（Set/Del/ExpireKey/Reset） |
+| `config` | `pkg/config/` | 配置管理：YAML 加载、原子配置、热重载 |
+| `metrics` | `pkg/metrics/` | Prometheus 指标采集与暴露 |
+| `log` | `pkg/log/` | 日志系统：zap 结构化日志 + lumberjack 轮转 |
+| `client` | `pkg/client/` | gRPC 客户端 SDK + Name Resolver |
+| `admin` | `pkg/server/admin.go` | 管理后台 API：状态聚合、配置查看、指标汇总、SSE 推送、集群节点信息 |
+| `frontend` | `frontend/` | React SPA 管理后台（嵌入 `pkg/cmd/admin-dist/`） |
+
+---
+
+## 数据流程
+
+### 写操作流程（Set）
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as CacheService
+    participant R as Raft Node
+    participant F as FSM
+    participant Cache as Cache Engine
+
+    C->>S: Set("key", "value", TTL)
+    
+    alt 单机模式
+        S->>F: Apply(SetCommand)
+        F->>Cache: Set("key", "value", TTL)
+        Cache-->>F: SetResponse
+        F-->>S: SetResponse
+    else 分布式模式 (Leader)
+        S->>R: Submit(SetCommand)
+        R->>R: 命令编码 → 追加 WAL
+        par 广播 AppendEntries
+            R->>R: Follower 1 (HTTP)
+            R->>R: Follower 2 (HTTP)
+        end
+        R->>R: 等待多数派确认
+        R->>R: 递增 commitIdx / lastApplied
+        R->>R: 达到阈值后 snapshot + compaction
+        R->>F: Apply(SetCommand)
+        F->>Cache: Set("key", "value", TTL)
+        Cache-->>F: SetResponse
+        F-->>R: SetResponse
+        R-->>S: SetResponse
+    else 分布式模式 (Follower)
+        S->>R: Submit(SetCommand)
+        R-->>S: ErrNotLeader
+    end
+    
+    S-->>C: SetResponse
+```
+
+### Raft 选举流程
+
+```mermaid
+sequenceDiagram
+    participant N1 as Node 1 (Follower)
+    participant N2 as Node 2 (Follower)
+    participant N3 as Node 3 (Follower)
+
+    Note over N1,N3: 选举超时 (election_ms + 随机抖动)
+
+    N1->>N1: term++, 投票给自己
+    N1->>N2: RequestVote(term, lastLogIndex, lastLogTerm)
+    N1->>N3: RequestVote(term, lastLogIndex, lastLogTerm)
+
+    N2->>N2: 检查日志完整性
+    N2-->>N1: VoteGranted ✅
+    N3->>N3: 检查日志完整性
+    N3-->>N1: VoteGranted ✅
+
+    Note over N1: 获得多数派 (2/3), 成为 Leader
+    N1->>N1: role = Leader
+    
+    loop 心跳 (heartbeat_ms 间隔)
+        N1->>N2: AppendEntries(heartbeat)
+        N1->>N3: AppendEntries(heartbeat)
+    end
+```
+
+### 过期清理流程
+
+```mermaid
+flowchart TD
+    A[后台 cleanupWorker] --> B{计算 nextCleanupDelay}
+    B -->|取 cleanupInterval 和堆顶过期时间的较小值| C[等待 delay]
+    C --> D[cleanupExpired]
+    
+    D --> E{获取写锁}
+    E --> F{时间预算耗尽?<br/>或处理数 >= 2000?}
+    F -->|是| G[释放锁, 更新指标]
+    F -->|否| H{堆顶条目已过期?}
+    H -->|否| G
+    H -->|是| I[heap.Pop 堆顶]
+    I --> J{items 中过期时间匹配?}
+    J -->|是| K[从 items + prefixTree 删除]
+    J -->|否| L[跳过 Set 更新过的条目]
+    K --> F
+    L --> F
+
+    M[Get 操作] --> N{key 已过期?}
+    N -->|是| O[释放读锁 → 获取写锁]
+    O --> P{双重检查: 仍然过期?}
+    P -->|是| Q[delInternal 完整清理]
+    P -->|否| R[返回 value]
+    N -->|否| R
+```
+
+---
+
+## 快速开始
+
+### 环境要求
+
+- Go 1.24+
+- Protocol Buffers 编译器 (protoc) — 仅开发时需要
+
+### 单机模式
+
+**1. 克隆项目**
+
+```bash
+git clone https://github.com/lushenle/simple-cache.git
+cd simple-cache
+```
+
+**2. 创建配置文件**
+
+```bash
+cp config.example.yaml config.yaml
+```
+
+默认配置即为单机模式，无需修改：
+
+```yaml
+mode: single
+node_id: node-1
+grpc_addr: ":5051"
+http_addr: ":8080"
+raft_http_addr: ":9090"
+metrics_addr: ":2112"
+peers: []
+heartbeat_ms: 200
+election_ms: 1200
+hot_reload: false
+load_on_startup: true
+dump_on_shutdown: true
+dump_format: binary
+data_dir: data
+```
+
+**3. 启动服务**
+
+```bash
+go run pkg/cmd/main.go
+```
+
+**4. 验证服务**
+
+```bash
+# 健康检查（JSON）
+curl http://localhost:8080/healthz
+
+# 就绪检查（single 模式返回 200）
+curl http://localhost:8080/readyz
+
+# 设置键值
+curl -X POST http://localhost:8080/v1/mykey \
+  -H "Content-Type: application/json" \
+  -d '{"value": "Hello World!", "expire": "10m"}'
+
+# 获取键值
+curl http://localhost:8080/v1/mykey
+
+# 删除键值
+curl -X DELETE http://localhost:8080/v1/mykey
+
+# 查看 Swagger API 文档
+# 浏览器打开 http://localhost:8080/api/docs/
+```
+
+### 分布式模式
+
+**1. 创建三个节点的配置文件**
+
+```bash
+# 节点 1
+cat > configs/node1.yaml << 'EOF'
+mode: distributed
+node_id: n1
+grpc_addr: ":5051"
+http_addr: ":8080"
+raft_http_addr: ":9090"
+metrics_addr: ":2112"
+peers:
+  - "http://127.0.0.1:9090"
+  - "http://127.0.0.1:9091"
+  - "http://127.0.0.1:9092"
+heartbeat_ms: 200
+election_ms: 1200
+EOF
+
+# 节点 2
+cat > configs/node2.yaml << 'EOF'
+mode: distributed
+node_id: n2
+grpc_addr: ":5052"
+http_addr: ":8081"
+raft_http_addr: ":9091"
+metrics_addr: ":2113"
+peers:
+  - "http://127.0.0.1:9090"
+  - "http://127.0.0.1:9091"
+  - "http://127.0.0.1:9092"
+heartbeat_ms: 200
+election_ms: 1200
+EOF
+
+# 节点 3
+cat > configs/node3.yaml << 'EOF'
+mode: distributed
+node_id: n3
+grpc_addr: ":5053"
+http_addr: ":8082"
+raft_http_addr: ":9092"
+metrics_addr: ":2114"
+peers:
+  - "http://127.0.0.1:9090"
+  - "http://127.0.0.1:9091"
+  - "http://127.0.0.1:9092"
+heartbeat_ms: 200
+election_ms: 1200
+EOF
+```
+
+**2. 分别启动三个节点**
+
+```bash
+# 终端 1
+CONFIG_PATH=configs/node1.yaml go run pkg/cmd/main.go
+
+# 终端 2
+CONFIG_PATH=configs/node2.yaml go run pkg/cmd/main.go
+
+# 终端 3
+CONFIG_PATH=configs/node3.yaml go run pkg/cmd/main.go
+```
+
+**3. 验证集群**
+
+```bash
+# 检查节点就绪状态（leader 返回 200；follower / candidate 返回 503）
+curl http://localhost:8080/readyz
+
+# 查看集群节点列表
+curl http://localhost:8080/cluster/peers
+
+# 通过 Leader 节点写入
+curl -X POST http://localhost:8080/v1/testkey \
+  -H "Content-Type: application/json" \
+  -d '{"value": "distributed value"}'
+
+# 通过 Leader 节点读取线性一致结果
+curl http://localhost:8080/v1/testkey
+
+# 如果请求 follower，读/写都会返回 not leader / FailedPrecondition
+```
+
+---
+
+## 项目结构
+
+```
+simple-cache/
+├── .github/workflows/
+│   └── ci-test.yml              # CI: push/PR 时自动运行测试
+├── bench/
+│   └── benchmark_test.go        # 基准测试
+├── configs/
+│   ├── node1.yaml               # 分布式节点 1 配置示例
+│   ├── node2.yaml               # 分布式节点 2 配置示例
+│   └── node3.yaml               # 分布式节点 3 配置示例
+├── docker/                      # Docker Compose 节点配置
+│   ├── node1.yaml
+│   ├── node2.yaml
+│   └── node3.yaml
+├── docs/                        # 项目文档
+├── frontend/                    # 管理后台 SPA
+│   ├── src/
+│   │   ├── api/                 #   API 客户端（admin/cache/cluster）
+│   │   ├── components/          #   UI 组件（layout/cache/cluster/metrics/watch）
+│   │   ├── hooks/               #   React hooks（useAuth/useCache/useCluster/useMetrics）
+│   │   ├── i18n/                #   国际化（I18nProvider + translations）
+│   │   ├── pages/               #   页面（Dashboard/Cluster/CacheBrowser/...）
+│   │   └── styles/              #   全局样式
+│   ├── vite.config.ts
+│   └── package.json
+├── pkg/
+│   ├── cache/                   # 📦 缓存引擎核心
+│   │   ├── cache.go             #   Cache 主结构 + New/Close + LRU 淘汰
+│   │   ├── set.go               #   Set 操作 + delInternal
+│   │   ├── get.go               #   Get 操作 + 惰性过期删除
+│   │   ├── del.go               #   Del 操作
+│   │   ├── expiration.go        #   SetExpiration 独立设置过期
+│   │   ├── cleanup.go           #   后台清理 Worker
+│   │   ├── search.go            #   前缀搜索 + 正则搜索
+│   │   ├── heap.go              #   过期最小堆 (container/heap)
+│   │   ├── reset.go             #   Reset 清空缓存
+│   │   ├── persistence.go       #   Dump/Load 数据持久化 (二进制 + JSON)
+│   │   ├── metrics.go           #   缓存大小估算
+│   │   └── *_test.go            #   单元测试 + 基准测试
+│   ├── client/                  # 📦 gRPC 客户端 SDK
+│   │   ├── client.go            #   Client (单节点/集群/自动切主/Watch/BatchSetStream)
+│   │   └── resolver/            #   自定义 gRPC Name Resolver (simplecache://)
+│   │       └── resolver.go
+│   ├── cmd/                     # 📦 主程序入口
+│   │   ├── main.go              #   启动流程 + 优雅关闭 + 集群管理 HTTP 端点
+│   │   ├── admin.go             #   Admin SPA 嵌入 + catch-all 路由
+│   │   ├── admin-dist/          #   内嵌管理后台静态文件（构建产物）
+│   │   └── swagger/             #   内嵌 Swagger UI 静态文件
+│   ├── command/                 # 📦 命令定义 (Command Pattern)
+│   │   ├── command.go           #   Set/Del/ExpireKey/Reset/Search Command
+│   │   └── codec.go             #   命令序列化/反序列化 (JSON → Raft log)
+│   ├── common/                  # 📦 公共常量 (Mode/DumpFormat/ProbeState)
+│   ├── config/                  # 📦 配置管理
+│   │   └── config.go            #   YAML 加载 + AtomicConfig + 热重载 Watcher
+│   ├── examples/usage/          # 📦 使用示例
+│   │   └── main.go
+│   ├── fsm/                     # 📦 有限状态机
+│   │   └── fsm.go               #   Apply(cmd) + Snapshot/RestoreSnapshot
+│   ├── log/                     # 📦 日志系统
+│   │   ├── log.go               #   Plugin 模式 + NewLogger
+│   │   ├── default.go           #   JSON 编码 + Lumberjack 轮转
+│   │   └── grpc_logger.go       #   gRPC/HTTP 拦截器日志
+│   ├── metrics/                 # 📦 Prometheus 指标
+│   │   └── metrics.go           #   缓存指标 + Raft 指标 + 持久化指标 + 系统指标
+│   ├── pb/                      # 📦 Protobuf 生成代码
+│   ├── proto/                   # 📦 .proto 源文件 + gRPC-Gateway 注解
+│   ├── raft/                    # 📦 Raft 共识实现
+│   │   ├── types.go             #   Role/LogEntry + AppendEntries/RequestVote/InstallSnapshot 消息
+│   │   ├── node.go              #   Raft 节点 (选举 + 日志复制 + ReadIndex + 成员变更)
+│   │   ├── storage.go           #   WAL 文件存储 + Meta 持久化 + Snapshot
+│   │   ├── http_transport.go    #   HTTP 传输层 (广播 + Peer 管理)
+│   │   └── peer.go              #   地址规范化
+│   ├── server/                  # 📦 gRPC 服务层
+│   │   ├── server.go            #   CacheService 实现 (所有 RPC + 速率限制 + Leader 读)
+│   │   ├── auth.go              #   gRPC/HTTP 认证拦截器
+│   │   ├── watch.go             #   WatchService 发布/订阅
+│   │   └── admin.go             #   Admin API：状态聚合、指标汇总、配置、SSE 推送
+│   └── utils/                   # 📦 工具函数 (Any PB 转换等)
+├── test/e2e/                    # 端到端测试
+├── config.example.yaml          # 配置示例
+├── Makefile                     # 构建/测试/Proto 生成/Docker
+├── Dockerfile                   # 多阶段 Docker 构建
+├── go.mod
+└── go.sum
+```
+
+---
+
+## API 参考
+
+### gRPC 接口
+
+服务名：`CacheService`
+
+| 方法 | 请求 | 响应 | 说明 |
+|------|------|------|------|
+| `Get` | `GetRequest{key}` | `GetResponse{value, found}` | 获取键值 |
+| `Set` | `SetRequest{key, value, expire}` | `SetResponse{success}` | 设置键值（支持 TTL） |
+| `Del` | `DelRequest{key}` | `DelResponse{success, existed}` | 删除键 |
+| `Reset` | `ResetRequest{}` | `ResetResponse{success, keys_cleared}` | 清空缓存 |
+| `Search` | `SearchRequest{pattern, mode}` | `SearchResponse{keys}` | 搜索键 |
+| `ExpireKey` | `ExpireKeyRequest{key, expire}` | `ExpireKeyResponse{success, existed}` | 设置过期时间 |
+| `Dump` | `DumpRequest{format, path}` | `DumpResponse{success, total_keys, file_size, path, format, duration_ms}` | 导出缓存数据到文件 |
+| `Load` | `LoadRequest{path}` | `LoadResponse{success, total_keys, loaded_keys, skipped_keys, path, duration_ms}` | 从文件导入缓存数据 |
+| `BatchSet` | `stream BatchSetRequest` | `BatchSetResponse{success_count, error_count, first_error}` | 流式批量写入 |
+| `Watch` | `WatchRequest{pattern}` | `stream WatchEvent{type, key, value}` | 订阅键变更事件 |
+
+**SearchRequest.MatchMode**：
+- `WILDCARD (0)` — 通配符匹配（默认），支持 `*`、`?`、`[...]`
+- `REGEX (1)` — 正则表达式匹配
+
+### Admin API
+
+管理后台专用接口，提供聚合状态和预处理数据，挂载在同一 HTTP 端口下（`/admin/api/*`）。
+
+| HTTP 方法 | 路径 | 说明 |
+|-----------|------|------|
+| `GET` | `/admin/api/status` | 聚合节点状态（模式、角色、运行时间、缓存统计、内存使用） |
+| `GET` | `/admin/api/metrics/summary` | 指标摘要（Prometheus 采集 + 聚合计算） |
+| `GET` | `/admin/api/config` | 当前配置（已脱敏，不含 `auth_token`） |
+| `GET` | `/admin/api/subscriptions` | 活跃 Watch 订阅列表 |
+| `DELETE` | `/admin/api/subscriptions/:id` | 终止指定订阅 |
+| `GET` | `/admin/api/cluster/nodes` | 集群节点详情（含角色、Leader 标识） |
+| `GET` | `/admin/api/raft` | Raft 状态（term、commit/lastApplied、peers） |
+| `GET` | `/admin/api/keys/stats` | 键统计（总数、过期堆大小、淘汰策略、内存估算） |
+| `POST` | `/admin/api/set/{key}` | Plain-value Set（前端无需感知 protobuf Any 编码） |
+| `GET` | `/admin/api/watch` | Watch 事件 SSE 流（`?pattern=*` 过滤；`?token=` 鉴权） |
+
+### REST 接口
+
+通过 grpc-gateway 自动映射，所有 gRPC 接口均可通过 HTTP 访问：
+
+| HTTP 方法 | 路径 | 说明 |
+|-----------|------|------|
+| `POST` | `/v1/{key}` | 设置键值 |
+| `GET` | `/v1/{key}` | 获取键值 |
+| `DELETE` | `/v1/{key}` | 删除键 |
+| `DELETE` | `/v1` | 清空缓存 |
+| `GET` | `/v1/search/{pattern}` | 通配符搜索 |
+| `GET` | `/v1/search/{pattern}/{mode}` | 按模式搜索（`wildcard` 或 `regex`） |
+| `POST` | `/v1/{key}/expire` | 设置过期时间 |
+| `POST` | `/v1/batch-set` | 流式批量写入 |
+| `GET` | `/v1/watch` | 订阅键变更事件（SSE，支持 `?pattern=*` 过滤） |
+| `POST` | `/v1/dump` | 导出缓存数据 |
+| `POST` | `/v1/load` | 导入缓存数据 |
+
+**示例：**
+
+```bash
+# Set
+curl -X POST http://localhost:8080/v1/greeting \
+  -H "Content-Type: application/json" \
+  -d '{"value": "Hello!", "expire": "5m"}'
+
+# Get
+curl http://localhost:8080/v1/greeting
+
+# Search (wildcard)
+curl http://localhost:8080/v1/search/user:*
+
+# Search (regex)
+curl http://localhost:8080/v1/search/^user:\d+$/regex
+
+# Expire
+curl -X POST http://localhost:8080/v1/greeting/expire \
+  -H "Content-Type: application/json" \
+  -d '{"expire": "30s"}'
+
+# Reset
+curl -X DELETE http://localhost:8080/v1
+
+# Dump（导出为二进制格式，默认）
+curl -X POST http://localhost:8080/v1/dump \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+# Dump（导出为 JSON 格式）
+curl -X POST http://localhost:8080/v1/dump \
+  -H "Content-Type: application/json" \
+  -d '{"format": "json"}'
+
+# Load（从默认路径加载）
+curl -X POST http://localhost:8080/v1/load \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+# Load（从指定路径加载）
+curl -X POST http://localhost:8080/v1/load \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/tmp/my-cache.dump.json"}'
+```
+
+### 集群管理接口
+
+| HTTP 方法 | 路径 | 说明 | 请求体 |
+|-----------|------|------|--------|
+| `POST` | `/cluster/join` | 加入节点 | `{"id": "n4", "addr": "http://127.0.0.1:9093"}` |
+| `POST` | `/cluster/leave` | 移除节点 | `{"addr": "http://127.0.0.1:9093"}` |
+| `GET` | `/cluster/peers` | 查看节点列表 | — |
+| `POST` | `/cluster/stepdown` | Leader 主动退位 | — |
+
+> `join/leave/peers/stepdown` 受 `auth_token` 保护；`addr` 必须是规范化的 `http(s)://host:port`。
+
+### 运维接口
+
+| HTTP 方法 | 路径 | 说明 |
+|-----------|------|------|
+| `GET` | `/healthz` | 健康检查（返回 JSON，表示服务与核心组件可用） |
+| `GET` | `/readyz` | 就绪检查（返回 JSON；single 为 ready，distributed 仅 Leader ready） |
+| `GET` | `/metrics` | Prometheus 指标（独立端口） |
+| `GET` | `/api/docs/` | Swagger UI |
+| `GET` | `/swagger/` | Swagger UI（备用路径） |
+
+---
+
+## 客户端 SDK
+
+### 安装
+
+```bash
+go get github.com/lushenle/simple-cache
+```
+
+### 基本使用
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "time"
+
+    "github.com/lushenle/simple-cache/pkg/client"
+)
+
+func main() {
+    // 创建客户端
+    cli, err := client.NewDefault("localhost:5051")
+    if err != nil {
+        panic(err)
+    }
+    defer cli.Close()
+
+    ctx := context.Background()
+    ctx = client.WithAuthToken(ctx, "your-token")
+
+    // Set — 设置键值（TTL 10 分钟）
+    err = cli.Set(ctx, "greeting", "Hello World!", 10*time.Minute)
+    if err != nil {
+        panic(err)
+    }
+
+    // Get — 获取键值
+    val, found, err := cli.Get(ctx, "greeting")
+    if err != nil {
+        panic(err)
+    }
+    if found {
+        fmt.Println("Value:", val)  // Output: Value: Hello World!
+    }
+
+    // Del — 删除键
+    existed, err := cli.Del(ctx, "greeting")
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println("Existed:", existed)  // Output: Existed: true
+}
+```
+
+### 批量操作
+
+```go
+// BatchSet — 批量设置
+items := map[string]string{
+    "user:1": "Alice",
+    "user:2": "Bob",
+    "user:3": "Charlie",
+}
+err := cli.BatchSet(ctx, items, 30*time.Minute)
+```
+
+### 搜索
+
+```go
+// 通配符搜索
+keys, err := cli.Search(ctx, "user:*", false)
+fmt.Println(keys)  // [user:1 user:2 user:3]
+
+// 正则搜索
+keys, err := cli.Search(ctx, `^user:\d+$`, true)
+```
+
+### 过期管理
+
+```go
+// 为已有 key 设置过期时间
+existed, err := cli.ExpireKey(ctx, "greeting", 5*time.Second)
+// existed 表示 key 是否存在
+
+// 移除过期时间（设为永不过期）
+existed, err := cli.ExpireKey(ctx, "greeting", 0)
+```
+
+### 集群模式（自动切主）
+
+```go
+// 使用 NewCluster 创建自动切主客户端
+cli, err := client.NewCluster(ctx, []client.NodeSpec{
+    {ID: "n1", GRPCAddr: ":5051", RaftAddr: "http://:9090"},
+    {ID: "n2", GRPCAddr: ":5052", RaftAddr: "http://:9091"},
+    {ID: "n3", GRPCAddr: ":5053", RaftAddr: "http://:9092"},
+}, client.WithCheckInterval(10*time.Second))
+if err != nil {
+    panic(err)
+}
+defer cli.Close()
+
+// 自动重试与切主：写操作
+err = cli.Set(ctx, "key", "value", 0)  // 连接到 Leader，失败时自动切到新 Leader
+
+// 自动重试与切主：读操作
+val, found, err := cli.Get(ctx, "key")
+```
+
+### 使用 gRPC Name Resolver（Phase 3）
+
+```go
+import "github.com/lushenle/simple-cache/pkg/client/resolver"
+
+conn, err := grpc.NewClient("simplecache:///:5051,:5052,:5053",
+    grpc.WithResolvers(&resolver.Builder{}),
+    grpc.WithTransportCredentials(insecure.NewCredentials()),
+)
+```
+
+### 完整方法列表
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `New` | `New(ctx, addr, ...opts) (*Client, error)` | 创建单节点客户端（向后兼容） |
+| `NewDefault` | `NewDefault(addr, ...opts) (*Client, error)` | 使用 `context.Background()` 创建单节点客户端 |
+| `NewSecure` | `NewSecure(ctx, addr, certFile, ...opts) (*Client, error)` | 使用 TLS 证书创建安全连接 |
+| `NewCluster` | `NewCluster(ctx, nodes, ...opts) (*Client, error)` | 创建集群客户端（自动 Leader 发现/切主/重试） |
+| `Close` | `Close() error` | 关闭连接 |
+| `Get` | `Get(ctx, key) (value, found, error)` | 获取值 |
+| `Set` | `Set(ctx, key, value, ttl) error` | 设置值 |
+| `Del` | `Del(ctx, key) (existed, error)` | 删除值 |
+| `Search` | `Search(ctx, pattern, isRegex) (keys, error)` | 搜索键 |
+| `ExpireKey` | `ExpireKey(ctx, key, ttl) (existed, error)` | 设置过期时间 |
+| `Reset` | `Reset(ctx) (cleared, error)` | 清空缓存 |
+| `BatchSet` | `BatchSet(ctx, items, ttl) error` | 批量设置（逐条调用 Set） |
+| `BatchSetStream` | `BatchSetStream(ctx, items, ttl) (successCount, errorCount, error)` | 流式批量写入（gRPC streaming，单次连接） |
+| `Watch` | `Watch(ctx, pattern) (<-chan *WatchEvent, error)` | 订阅键变更事件（自动重连） |
+| `Close` | `Close() error` | 关闭客户端连接和后台协程 |
+
+---
+
+## 管理后台
+
+Simple-Cache 内嵌了一个 React 18 + TypeScript 单页管理后台，可通过 `http://<http_addr>/admin/` 访问。
+
+### 功能模块
+
+| 页面 | 路径 | 功能 |
+|------|------|------|
+| **仪表盘** | `/admin/` | 概览面板：关键指标卡片、请求延迟/QPS/内存/Key 数量趋势图、集群状态、Raft 状态 |
+| **集群管理** | `/admin/cluster` | 节点列表（含角色/状态标签）、加入/移除节点、Leader 主动退位、Raft 指标面板 |
+| **缓存浏览** | `/admin/cache` | Key 搜索（通配符/正则）、新建/编辑/删除 Key、TTL 设置、批量写入、清空缓存 |
+| **Key 详情** | `/admin/cache/:key` | 单个 Key 的值、类型、TTL、大小等详细信息 |
+| **订阅管理** | `/admin/subscriptions` | 管理 Watch 订阅、实时事件流展示、暂停/恢复/清空 |
+| **运维操作** | `/admin/operations` | Dump/Load 持久化操作、缓存状态统计 |
+| **系统设置** | `/admin/settings` | 当前配置只读视图 |
+
+### 技术栈
+
+- React 18 + TypeScript + Vite
+- React Router (BrowserRouter, basename `/admin`)
+- TanStack Query (React Query) — 服务端状态管理、自动轮询
+- Recharts — 指标图表
+- Tailwind CSS — 样式
+
+### 认证
+
+管理后台本身是静态文件（公开），但所有 API 调用均需携带 `auth_token`。首次访问会显示登录页，输入 token 后存入 `localStorage`，后续请求自动附加 `x-api-token` 头。
+
+### 国际化
+
+支持中文/英文切换，默认根据浏览器语言自动选择。70+ 翻译键覆盖所有 UI 文案。
+
+### 构建
+
+```bash
+# 开发模式（前端 dev server + Go 后端独立运行）
+cd frontend && npm run dev    # Vite 端口 5173，自动 proxy API 到 8080
+go run pkg/cmd/main.go       # Go 后端
+
+# 生产构建（前端构建 + 内嵌到二进制）
+make frontend    # npm ci → build → 复制 dist 到 pkg/cmd/admin-dist/
+make build-with-ui  # 前端构建 + Go 编译
+```
+
+---
+
+## 配置说明
+
+配置文件默认为 `config.yaml`，可通过环境变量 `CONFIG_PATH` 指定路径。
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `mode` | string | `single` | 运行模式：`single`（单机）/ `distributed`（分布式） |
+| `node_id` | string | `node-1` | 节点唯一标识 |
+| `grpc_addr` | string | `:5051` | gRPC 服务监听地址 |
+| `http_addr` | string | `:8080` | HTTP 网关监听地址 |
+| `raft_http_addr` | string | `:9090` | Raft 节点间通信地址 |
+| `metrics_addr` | string | `:2112` | Prometheus 指标暴露地址 |
+| `peers` | []string | `[]` | 集群节点 Raft HTTP 地址列表 |
+| `peer_addresses` | map[string]string | `{}` | 节点 ID → gRPC 地址映射（Phase 2 leader 发现） |
+| `heartbeat_ms` | int | `200` | Leader 心跳间隔（毫秒） |
+| `election_ms` | int | `1200` | 选举超时基准值（毫秒），实际超时 = `election_ms + random(0..election_ms)` |
+| `hot_reload` | bool | `false` | 是否启用配置文件热重载（每秒轮询） |
+| `load_on_startup` | bool | `true` | 启动时是否自动从默认路径加载缓存数据（仅 single 模式生效） |
+| `dump_on_shutdown` | bool | `true` | 关闭时是否自动导出缓存数据到默认路径 |
+| `dump_format` | string | `binary` | 默认导出格式：`binary` 或 `json` |
+| `data_dir` | string | `data` | 数据文件存储目录（Dump 文件 + Raft WAL） |
+| `auth_token` | string | `""` | 管理接口与写接口鉴权 token |
+| `enable_tls` | bool | `false` | 是否为 gRPC 服务启用 TLS |
+| `tls_cert_file` | string | `""` | gRPC TLS 证书路径 |
+| `tls_key_file` | string | `""` | gRPC TLS 私钥路径 |
+| `allowed_origins` | []string | `[]` | HTTP CORS 白名单 |
+| `snapshot_enabled` | bool | `true` | distributed 模式下是否启用 Raft snapshot |
+| `snapshot_threshold` | uint64 | `1024` | 距离上一次 snapshot 的已应用日志条数达到阈值后触发压缩 |
+| `max_keys` | int | `0` | 最大 key 数（0 = 不限），配合 `eviction_policy: lru` 使用 |
+| `max_value_size` | int | `0` | 单 value 最大字节数（0 = 不限） |
+| `max_qps` | int | `0` | 每客户端每秒请求数限制（0 = 不限） |
+| `eviction_policy` | string | `none` | 淘汰策略：`none`（拒绝写入）或 `lru`（淘汰最近最少使用） |
+
+> **注意**：`grpc_addr`、`http_addr`、`raft_http_addr`、`metrics_addr` 在服务启动时绑定，不支持热重载。
+
+---
+
+## 分布式部署指南
+
+> 扩缩容、故障恢复、探针与值班操作请直接参考 [运维手册](docs/runbook.md)。
+
+### Docker 部署
+
+```bash
+# 构建镜像
+make docker-build
+
+# 使用 docker-compose 启动 3 节点集群
+docker compose up -d
+
+# 访问管理后台
+open http://localhost:8080/admin/
+```
+
+Dockerfile 采用多阶段构建（Node 构建前端 → Go 构建二进制 → Alpine 运行镜像），最终镜像约 30 MB。
+
+各服务端口映射：
+
+| 容器 | HTTP (:8080) | gRPC (:5051) | Raft (:9090) | Metrics (:2112) |
+|------|-------------|-------------|-------------|----------------|
+| node1 | 8080 | 5051 | 9090 | 2112 |
+| node2 | 8081 | 5052 | 9091 | 2113 |
+| node3 | 8082 | 5053 | 9092 | 2114 |
+
+### 架构概览
+
+```mermaid
+graph LR
+    subgraph "Simple-Cache 集群"
+        N1["Node 1<br/>:5051/:8080<br/>Raft:9090"]
+        N2["Node 2<br/>:5052/:8081<br/>Raft:9091"]
+        N3["Node 3<br/>:5053/:8082<br/>Raft:9092"]
+    end
+
+    N1 <-->|Raft HTTP| N2
+    N2 <-->|Raft HTTP| N3
+    N1 <-->|Raft HTTP| N3
+
+    Client["Client"] -->|gRPC/HTTP| N1
+    Client -->|gRPC/HTTP| N2
+    Client -.->|读写都应命中 Leader| N3
+```
+
+### 部署要点
+
+1. **每个节点需要独立的端口** — gRPC、HTTP、Raft、Metrics 各自使用不同端口
+2. **所有节点的 `peers` 列表必须一致** — 包含集群中所有节点的 Raft HTTP 地址
+3. **建议至少 3 个节点** — Raft 需要多数派确认，2 个节点无法容忍任何故障
+4. **客户端推荐使用 `NewCluster` 自动切主** — 多节点 client 自动发现 Leader，遇到 `not leader` 错误自动重试并切到新 Leader
+5. **Single-node client 仍可连接任意节点** — 但分布式写需命中 Leader，Follower 返回 `FailedPrecondition`
+
+### 动态扩缩容
+
+```bash
+# 向集群添加新节点
+curl -X POST http://localhost:8080/cluster/join \
+  -H "Content-Type: application/json" \
+  -d '{"id": "n4", "addr": "http://127.0.0.1:9093"}'
+
+# 从集群移除节点
+curl -X POST http://localhost:8080/cluster/leave \
+  -H "Content-Type: application/json" \
+  -d '{"addr": "http://127.0.0.1:9093"}'
+```
+
+---
+
+## Kubernetes Operator
+
+Simple-Cache 提供了 Kubernetes Operator，通过声明式 API 自动管理分布式缓存集群的部署、扩缩容和自愈。
+
+### 安装 Operator
+
+```bash
+# 添加 Helm 仓库
+helm repo add simple-cache https://lushenle.github.io/simple-cache
+helm repo update
+
+# 安装 Operator
+helm install simple-cache-operator simple-cache/simple-cache-operator
+```
+
+### 创建缓存集群
+
+```yaml
+apiVersion: cache.shenle.lu/v1
+kind: CacheCluster
+metadata:
+  name: my-cache
+spec:
+  replicas: 3
+  storage:
+    size: 10Gi
+```
+
+```bash
+kubectl apply -f my-cache.yaml
+kubectl get cacheclusters
+# NAME        REPLICAS   READY   LEADER        AGE
+# my-cache    3          3       my-cache-0    30s
+```
+
+### 特性
+
+- **声明式管理** — 通过 `CacheCluster` CR 定义集群，Operator 自动创建 StatefulSet、Service、ConfigMap
+- **Raft 共识** — 每个 Pod 运行一个 simple-cache 实例，通过 Raft 协议保证数据一致性
+- **滚动更新** — StatefulSet 有序更新，支持 partition 金丝雀发布
+- **扩缩容** — 修改 `spec.replicas` 即可扩缩容（支持 1/3/5 节点）
+- **持久存储** — 每个 Pod 独立 PVC，Raft snapshot + WAL 保证数据不丢失
+- **监控集成** — 自动创建 Prometheus ServiceMonitor
+
+### Operator 项目结构
+
+```
+operator/
+├── cmd/main.go                     # Operator 入口
+├── api/v1/                         # CRD 类型定义
+│   ├── cachecluster_types.go
+│   └── groupversion_info.go
+├── internal/controller/            # Controller 实现
+│   ├── cachecluster_controller.go  # Reconcile 主逻辑
+│   ├── service.go                  # Headless + Client Service
+│   ├── configmap.go               # 动态配置生成
+│   ├── statefulset.go             # StatefulSet 构建
+│   └── status.go                  # 集群状态采集
+├── config/
+│   ├── crd/bases/                  # CRD YAML
+│   ├── rbac/                       # RBAC 权限
+│   └── samples/                    # 示例 CR
+├── helm/simple-cache-operator/     # Helm Chart
+└── Dockerfile
+```
+
+### 开发
+
+```bash
+cd operator
+
+# 生成 CRD 和 RBAC
+make manifests
+
+# 编译
+make build
+
+# 运行测试
+make test
+```
+
+> 详细设计参见 [docs/k8s-operator-design.md](docs/k8s-operator-design.md)
+
+---
+
+## 监控指标
+
+所有指标通过独立的 Metrics 端口（默认 `:2112`）暴露，可由 Prometheus 抓取。
+
+### 缓存指标
+
+| 指标名 | 类型 | 标签 | 说明 |
+|--------|------|------|------|
+| `simple_cache_requests_total` | Counter | `op`, `status` | 请求总数 |
+| `simple_cache_request_duration_seconds` | Histogram | `op` | 请求延迟 |
+| `simple_cache_keys_total` | Gauge | — | 当前 key 总数 |
+| `simple_cache_expiration_heap_size` | Gauge | — | 过期堆条目数 |
+| `cache_operation_duration_seconds` | Histogram | `operation` | 操作执行耗时 |
+| `cache_operation_total` | Counter | `operation`, `status` | 操作计数 |
+| `cache_size_bytes` | Gauge | `type` | 缓存大小 |
+| `cache_mutex_wait_seconds` | Histogram | `op_type` | 锁等待时间 |
+
+### Raft 指标
+
+| 指标名 | 类型 | 标签 | 说明 |
+|--------|------|------|------|
+| `raft_role` | Gauge | `node_id`, `role` | 节点当前角色 |
+| `raft_commit_index` | Gauge | — | 提交索引 |
+| `raft_last_applied` | Gauge | — | 最后应用的日志索引 |
+| `raft_leader_changes_total` | Counter | — | Leader 变更次数 |
+| `raft_append_entries_latency_seconds` | Histogram | — | AppendEntries 广播延迟 |
+| `simple_cache_peers_total` | Gauge | — | 集群 Peer 数量 |
+| `raft_pending_entries` | Gauge | — | 待应用的日志条目数 |
+| `raft_snapshot_age_seconds` | Gauge | — | 最新 snapshot 年龄（秒） |
+
+### 系统指标
+
+| 指标名 | 类型 | 标签 | 说明 |
+|--------|------|------|------|
+| `process_memory_bytes` | Gauge | `state` | 进程内存（`alloc` / `total`） |
+
+### 缓存管理指标
+
+| 指标名 | 类型 | 标签 | 说明 |
+|--------|------|------|------|
+| `cache_evictions_total` | Counter | — | LRU 淘汰总次数 |
+
+### 持久化指标
+
+| 指标名 | 类型 | 标签 | 说明 |
+|--------|------|------|------|
+| `cache_persistence_op_total` | Counter | `op` (dump/load), `status` (success/error) | 持久化操作总数 |
+| `cache_persistence_duration_seconds` | Histogram | `op` (dump/load) | 持久化操作耗时 |
+| `cache_dump_keys_total` | Gauge | — | 最近一次 Dump 的 key 数 |
+| `cache_load_keys_total` | Gauge | `state` (loaded/skipped) | 最近一次 Load 的 key 数 |
+
+---
+
+## 开发指南
+
+### 构建
+
+```bash
+# 编译
+go build ./...
+
+# 运行
+go run pkg/cmd/main.go
+
+# 指定配置文件
+CONFIG_PATH=configs/node1.yaml go run pkg/cmd/main.go
+```
+
+### 测试
+
+```bash
+# 运行所有单元测试（带覆盖率）
+make test
+
+# 运行带 Race 检测的测试
+make test-race
+
+# 运行 E2E 测试（需要 e2e 构建标签）
+make test-e2e
+
+# 运行 CI 全套检查（vet + test + test-race）
+make ci
+
+# 运行基准测试
+go test -bench=. -benchmem ./pkg/cache/
+go test -bench=. -benchmem ./bench/
+```
+
+### 前端开发
+
+```bash
+# 安装依赖
+make frontend-install
+
+# 构建前端（生成 dist/）
+make frontend-build
+
+# 构建前端 + 嵌入到 Go 二进制
+make frontend
+
+# 构建带管理后台的完整二进制
+make build-with-ui
+```
+
+### Proto 代码生成
+
+```bash
+make proto
+```
+
+该命令会：
+1. 清理旧的生成代码
+2. 使用 `protoc` 生成 Go 代码（pb + grpc + gateway）
+3. 生成 OpenAPI/Swagger 文档
+
+### 代码格式化
+
+```bash
+make fmt    # 使用 gofumpt 格式化
+make vet    # 静态分析
+```
+
+---
+
+## 设计详解
+
+### 缓存数据结构
+
+缓存引擎采用**三层数据结构**协同工作，在读写性能和功能之间取得平衡：
+
+```mermaid
+graph TB
+    subgraph "Cache 数据结构"
+        MAP["HashMap<br/>map[string]*Item<br/><br/>• O(1) Get/Set/Del<br/>• 主存储"]
+        TREE["Radix Tree<br/>基数树<br/><br/>• O(k) 前缀搜索<br/>• k = 匹配的 key 数"]
+        HEAP["Min-Heap<br/>最小堆<br/><br/>• O(1) 查看最早过期<br/>• O(log n) 插入/删除<br/>• 配合 index map"]
+        INDEX["ExpirationIndex<br/>map[string]int<br/><br/>• key → 堆索引<br/>• O(1) 定位堆元素"]
+    end
+
+    MAP <-->|同步写入/删除| TREE
+    MAP <-->|同步写入/删除| HEAP
+    HEAP <-->|onSwap 回调同步| INDEX
+```
+
+| 结构 | 用途 | 时间复杂度 |
+|------|------|-----------|
+| `map[string]*Item` | 主存储，O(1) 随机读写 | Get O(1), Set O(1), Del O(log n)* |
+| `radix.Tree` | 前缀索引，支持高效前缀搜索 | Insert O(k), Search O(k), Delete O(k) |
+| `ExpirationHeap` + `ExpirationIndex` | 过期时间管理，堆顶为最早过期 | Push O(log n), Pop O(log n), Remove O(log n) |
+
+> *Del 需要同时从堆中移除过期条目，堆删除为 O(log n)。
+
+**写操作一致性保证**：每次 Set/Del 操作都会同时更新三个数据结构，确保它们始终一致。Set 时如果 key 已存在，会先调用 `delInternal()` 完整清理旧条目（包括堆中的过期条目），再写入新条目。
+
+**堆索引同步**：`ExpirationHeap` 通过 `onSwap` 回调机制，在每次堆元素位置变化时自动更新 `ExpirationIndex`，确保索引始终准确。
+
+### Raft 共识实现
+
+Simple-Cache 采用自研的轻量级 Raft 实现，通过 HTTP 传输层进行节点间通信：
+
+**核心特性**：
+
+| 特性 | 实现方式 |
+|------|---------|
+| Leader 选举 | 随机化超时（`election_ms + jitter`），多数派投票 |
+| 日志复制 | Leader 追加 WAL → 广播 AppendEntries / InstallSnapshot → 多数派确认 |
+| 日志一致性 | `PrevLogIndex` + `PrevLogTerm` 检查 + 冲突截断 |
+| 安全性 | term 比较 + 日志完整性检查（`lastLogIndex` + `lastLogTerm`）+ ReadIndex 线性一致读 |
+| 持久化 | WAL + Snapshot + Meta JSON 文件（含 `snapshot_index` / `snapshot_term`） |
+| 恢复 | 启动时先恢复 snapshot，再回放其后的 WAL 增量日志 |
+| 日志压缩 | 已应用日志达到 `snapshot_threshold` 后触发 snapshot 与 compaction |
+| 传输层 | HTTP（共享连接池 + request context timeout） |
+| 成员变更 | 通过 Raft 日志提交 peer change，持久化到 meta 文件 |
+| 领导权移交 | `POST /cluster/stepdown` 主动触发 Leader 退位 |
+| 并发安全 | `sync.Mutex` 保护共享状态，`atomic.Value` 保护角色 |
+
+**角色转换**：
+
+```mermaid
+stateDiagram-v2
+    [*] --> Follower: 启动
+    Follower --> Candidate: 选举超时
+    Candidate --> Leader: 获得多数派投票
+    Candidate --> Follower: 收到更高 term 的心跳/投票
+    Leader --> Follower: 收到更高 term 的 AppendEntries
+    Follower --> Follower: 收到 Leader 心跳（重置选举超时）
+```
+
+### 过期与清理机制
+
+采用**主动清理 + 惰性删除**双重策略：
+
+**主动清理（后台 Worker）**：
+- 智能调度：根据堆顶条目的过期时间动态调整清理间隔
+- 时间预算：`cleanupInterval / 20`，避免长时间持锁影响读写性能
+- 批量限制：每次最多处理 2000 条过期条目
+- 一致性检查：清理时验证 `items` 中的过期时间与堆中一致，防止误删被 Set 更新过的条目
+
+**惰性删除（Get 时触发）**：
+- Get 操作发现 key 已过期时，升级为写锁
+- 双重检查（Double-Check）后调用 `delInternal()` 完整清理
+- 避免了清理 Worker 未及时处理时的过期数据读取
+
+### 搜索机制
+
+支持两种搜索模式：
+
+| 模式 | 实现 | 时间复杂度 | 适用场景 |
+|------|------|-----------|---------|
+| 前缀搜索 | `radix.Tree.WalkPrefix()` | O(k) | `user:*`、`order:2024*` |
+| 通配符搜索 | `filepath.Match()` + 全树遍历 | O(n) | `user:*-active`、`item:??` |
+| 正则搜索 | `regexp.Compile()` + 全树遍历 | O(n) | `^user:\d{4}$` |
+
+当 pattern 以 `*` 结尾时，自动使用高效的 `WalkPrefix` 前缀搜索；其他情况使用全树遍历。搜索使用读锁，不阻塞写操作。
+
+### 日志系统
+
+基于 **uber-go/zap** 高性能结构化日志库：
+
+- **Plugin 模式** — 支持灵活组合多个日志输出目标（stdout、stderr、文件）
+- **JSON 编码** — 默认使用 JSON 格式，便于日志采集系统解析
+- **日志轮转** — 集成 lumberjack，单文件最大 100MB，保留 7 天，自动压缩
+- **中间件日志** — 内置 gRPC 拦截器和 HTTP 中间件，自动记录请求方法、耗时、状态码
+- **调用者信息** — 自动记录调用文件名和行号（`AddCaller`）
+
+### 数据持久化
+
+Simple-Cache 支持将内存中的缓存数据导出到本地磁盘文件（Dump），并在启动时从磁盘文件恢复数据（Load）。
+
+**触发方式**：
+
+| 触发方式 | 时机 | 说明 |
+|---------|------|------|
+| 自动 Dump | 进程优雅关闭时 | 在 `c.Close()` 之前执行，失败不阻止关闭 |
+| 自动 Load | 进程启动时 | 仅 single 模式启用，在 `server.New()` 之前执行，失败不阻止启动 |
+| 手动 Dump | API 调用 `POST /v1/dump` | 指定格式（binary/json）和路径 |
+| 手动 Load | API 调用 `POST /v1/load` | 仅 single 模式允许；先清空缓存，再从文件加载 |
+
+**文件格式**：
+
+| 格式 | 文件扩展名 | 特点 |
+|------|-----------|------|
+| 二进制（默认） | `.dump` | 紧凑高效，16 字节头 + 条目 + 8 字节 CRC32 尾 |
+| JSON | `.dump.json` | 人类可读，便于调试和数据迁移 |
+
+**文件命名规则**：`{data_dir}/cache-{node_id}.dump[.json]`
+
+**核心流程**：
+
+```
+Dump: 获取写锁 → 遍历 items → 序列化 → 写入 .tmp → rename → 释放锁
+Load: 读取文件 → 解析格式 → 获取写锁 → 清空缓存 → 逐条加载（跳过已过期） → 释放锁
+```
+
+**原子写入**：Dump 采用"写临时文件 + os.Rename"策略，确保即使写入过程中断也不会损坏已有文件。
+
+**过期处理**：Load 时逐条检查过期时间，已过期的 key 直接跳过（计入 `skipped_keys`），即将过期的 key 正常加载后由 cleanupWorker 清理。
+
+> 详细设计参见 [docs/cache-persistence.md](docs/cache-persistence.md)
+
+---
+
+## License
+
+MIT

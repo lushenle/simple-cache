@@ -1,0 +1,37 @@
+name: Release Helm Chart
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'operator/helm/simple-cache-operator/**'
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint Helm Chart
+        run: helm lint operator/helm/simple-cache-operator/
+
+      - name: Run chart-releaser
+        uses: helm/chart-releaser-action@v1
+        with:
+          charts_dir: operator/helm
+          charts_repo_url: https://lushenle.github.io/simple-cache
+        env:
+          CR_TOKEN: ${{ secrets.CHART_RELEASER_TOKEN }}
