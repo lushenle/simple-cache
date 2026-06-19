@@ -1,0 +1,16 @@
+apiVersion: v2
+name: simple-cache-operator
+description: Kubernetes Operator for Simple-Cache distributed cache cluster
+type: application
+version: 0.1.0
+appVersion: "v0.1.0"
+home: https://github.com/lushenle/simple-cache
+sources:
+  - https://github.com/lushenle/simple-cache
+maintainers:
+  - name: Shenle Lu
+keywords:
+  - cache
+  - raft
+  - operator
+  - kubernetes

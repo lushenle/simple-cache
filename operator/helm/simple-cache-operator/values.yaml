@@ -1,0 +1,83 @@
+# Operator configuration
+operator:
+  replicas: 1
+  image:
+    repository: ishenle/simple-cache-operator
+    tag: v0.1.0
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  metrics:
+    port: 9091
+  probe:
+    port: 9092
+
+# Whether to create a default CacheCluster instance
+createDefaultCluster: false
+defaultCluster:
+  replicas: 3
+  image: registry.shenle.lu/ishenle/simple-cache:latest
+  imagePullPolicy: IfNotPresent
+  cache:
+    maxKeys: 0
+    maxValueSize: 0
+    evictionPolicy: none
+    maxQPS: 0
+  raft:
+    heartbeatMs: 200
+    electionMs: 5000
+    snapshotEnabled: true
+    snapshotThreshold: 1024
+  persistence:
+    dumpOnShutdown: true
+    loadOnStartup: false
+    dumpFormat: binary
+    dataDir: /data
+  storage:
+    size: 10Gi
+    storageClassName: ""
+  auth:
+    enabled: false
+  tls:
+    enabled: false
+  monitoring:
+    serviceMonitor:
+      enabled: false
+      interval: 30s
+  # Optional: set resources for the default cluster pods
+  # resources:
+  #   requests:
+  #     cpu: 200m
+  #     memory: 256Mi
+  #   limits:
+  #     cpu: "1"
+  #     memory: 512Mi
+  # Optional: scheduling constraints
+  # affinity: {}
+  # tolerations: []
+  # nodeSelector: {}
+  # topologySpreadConstraints: []
+  # terminationGracePeriodSeconds: 60
+  # extraEnv: []
+
+# RBAC
+rbac:
+  create: true
+
+# ServiceMonitor for the operator itself
+serviceMonitor:
+  enabled: false
+
+# Leader election — enable for multi-replica deployments
+leaderElection:
+  enabled: true
+
+# PodDisruptionBudget — protects Raft quorum during voluntary disruptions
+pdb:
+  enabled: true
+  maxUnavailable: 1

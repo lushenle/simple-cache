@@ -1,0 +1,41 @@
+apiVersion: cache.shenle.lu/v1
+kind: CacheCluster
+metadata:
+  name: my-cache
+spec:
+  replicas: 3
+  image: registry.shenle.lu/ishenle/simple-cache:latest
+  imagePullPolicy: IfNotPresent
+  cache:
+    maxKeys: 100000
+    maxValueSize: 0
+    evictionPolicy: lru
+    maxQPS: 0
+  raft:
+    heartbeatMs: 200
+    electionMs: 5000
+    snapshotEnabled: true
+    snapshotThreshold: 1024
+  persistence:
+    dumpOnShutdown: true
+    loadOnStartup: false
+    dumpFormat: binary
+    dataDir: /data
+  storage:
+    size: 10Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  auth:
+    enabled: false
+  tls:
+    enabled: false
+  monitoring:
+    serviceMonitor:
+      enabled: false
+      interval: 30s
