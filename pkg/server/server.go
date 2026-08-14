@@ -272,7 +272,9 @@ func (s *CacheService) checkLeaderRead(ctx context.Context) error {
 	if s.node == nil {
 		return nil // single mode
 	}
-	riCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	// ReadIndex now waits for the state machine to catch up with the
+	// recorded commit index (up to 1s); allow the full wait.
+	riCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	if _, err := s.node.ReadIndex(riCtx); err != nil {
 		return status.Errorf(codes.FailedPrecondition, "read index check failed: %v", err)

@@ -27,14 +27,23 @@ var raftHTTPClient = &http.Client{
 }
 
 type HTTPTransport struct {
-	addr    string
-	mu      sync.RWMutex
-	peers   []string
-	node    *Node
-	httpSrv *http.Server
+	addr      string
+	selfAddr  string
+	authToken string
+	mu        sync.RWMutex
+	peers     []string
+	node      *Node
+	httpSrv   *http.Server
 }
 
-func NewHTTPTransport(addr string, peers []string, logger *zap.Logger) (*HTTPTransport, error) {
+// Request body limits: raft RPCs are small; InstallSnapshot chunks are
+// bounded by installSnapshotChunkSize with headroom (P2-13).
+const (
+	raftRPCMaxBody          = 1 << 20 // 1 MiB for append/vote
+	raftSnapshotChunkMaxBody = 8 << 20 // 8 MiB for install snapshot
+)
+
+func NewHTTPTransport(addr string, peers []string, authToken string, logger *zap.Logger) (*HTTPTransport, error) {
 	normalized := make([]string, 0, len(peers))
 	for _, peer := range peers {
 		value, err := NormalizePeerAddr(peer)
@@ -49,13 +58,19 @@ func NewHTTPTransport(addr string, peers []string, logger *zap.Logger) (*HTTPTra
 		}
 		normalized = append(normalized, value)
 	}
-	return &HTTPTransport{addr: addr, peers: normalized}, nil
+	t := &HTTPTransport{addr: addr, peers: normalized, authToken: authToken}
+	t.selfAddr = findSelfAddr(addr, normalized)
+	return t, nil
 }
 
 func (t *HTTPTransport) Start(node *Node) {
 	t.node = node
 	mux := http.NewServeMux()
 	mux.HandleFunc("/raft/append", func(w http.ResponseWriter, r *http.Request) {
+		if !t.authorized(w, r) {
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, raftRPCMaxBody)
 		var req AppendEntriesReq
 		b, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -75,6 +90,10 @@ func (t *HTTPTransport) Start(node *Node) {
 		w.Write(out)
 	})
 	mux.HandleFunc("/raft/vote", func(w http.ResponseWriter, r *http.Request) {
+		if !t.authorized(w, r) {
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, raftRPCMaxBody)
 		var req RequestVoteReq
 		b, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -94,6 +113,10 @@ func (t *HTTPTransport) Start(node *Node) {
 		w.Write(out)
 	})
 	mux.HandleFunc("/raft/install_snapshot", func(w http.ResponseWriter, r *http.Request) {
+		if !t.authorized(w, r) {
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, raftSnapshotChunkMaxBody)
 		var req InstallSnapshotReq
 		b, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -142,6 +165,7 @@ func (t *HTTPTransport) sendAppend(ctx context.Context, peer string, req AppendE
 		return AppendEntriesResp{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	t.setAuthHeader(httpReq)
 
 	resp, err := raftHTTPClient.Do(httpReq)
 	if err != nil {
@@ -179,6 +203,7 @@ func (t *HTTPTransport) sendInstallSnapshot(ctx context.Context, peer string, re
 		return InstallSnapshotResp{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	t.setAuthHeader(httpReq)
 
 	resp, err := raftHTTPClient.Do(httpReq)
 	if err != nil {
@@ -282,6 +307,7 @@ func (t *HTTPTransport) sendVote(ctx context.Context, peer string, req RequestVo
 		return RequestVoteResp{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	t.setAuthHeader(httpReq)
 
 	resp, err := raftHTTPClient.Do(httpReq)
 	if err != nil {
@@ -307,7 +333,37 @@ func (t *HTTPTransport) sendVote(ctx context.Context, peer string, req RequestVo
 	return out, nil
 }
 
+// authorized checks the shared raft auth token when one is configured.
+// With an empty token (the default) any caller is allowed, preserving
+// compatibility with existing single-node deployments.
+func (t *HTTPTransport) authorized(w http.ResponseWriter, r *http.Request) bool {
+	if t.authToken == "" {
+		return true
+	}
+	if r.Header.Get("Authorization") != "Bearer "+t.authToken {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
+// setAuthHeader attaches the shared token to an outgoing raft RPC.
+func (t *HTTPTransport) setAuthHeader(req *http.Request) {
+	if t.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+t.authToken)
+	}
+}
+
 func (t *HTTPTransport) isSelf(peer string) bool {
+	if t.selfAddr != "" && peer == t.selfAddr {
+		return true
+	}
+	return t.legacyIsSelf(peer)
+}
+
+// legacyIsSelf keeps the previous port/host heuristic as a fallback when the
+// node's own advertised address could not be matched at construction time.
+func (t *HTTPTransport) legacyIsSelf(peer string) bool {
 	peerURL, err := url.Parse(peer)
 	if err != nil {
 		return false
@@ -341,4 +397,87 @@ func isLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// findSelfAddr identifies which normalized peer URL is this node's own
+// advertised address. It matches on the bind port plus, when the bind host is
+// explicit, an equal host; when the bind host is wildcard/empty, any peer
+// host that resolves to a loopback or one of this node's interface addresses.
+// This is what makes containerized deployments (service names / pod IPs)
+// recognize themselves instead of double-counting their own vote.
+func findSelfAddr(bindAddr string, peers []string) string {
+	bindHost, bindPort, err := net.SplitHostPort(bindAddr)
+	if err != nil {
+		return ""
+	}
+	localIPs := localInterfaceIPs()
+	for _, p := range peers {
+		u, err := url.Parse(p)
+		if err != nil {
+			continue
+		}
+		host, port, err := net.SplitHostPort(u.Host)
+		if err != nil || port != bindPort {
+			continue
+		}
+		if bindHost != "" && bindHost != "0.0.0.0" && bindHost != "::" {
+			if strings.EqualFold(host, bindHost) {
+				return p
+			}
+			continue
+		}
+		if hostIsLocal(host, localIPs) {
+			return p
+		}
+	}
+	return ""
+}
+
+// localInterfaceIPs returns the node's non-loopback interface IPs.
+func localInterfaceIPs() []string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, a := range addrs {
+		var ip net.IP
+		switch v := a.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if ip != nil && !ip.IsLoopback() {
+			out = append(out, ip.String())
+		}
+	}
+	return out
+}
+
+// hostIsLocal reports whether host (or any IP it resolves to) is a loopback
+// address or one of this node's own interface addresses.
+func hostIsLocal(host string, localIPs []string) bool {
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || containsIP(localIPs, ip.String())
+	}
+	ips, err := net.LookupHost(host)
+	if err != nil {
+		return false
+	}
+	for _, h := range ips {
+		if ip := net.ParseIP(h); ip != nil && (ip.IsLoopback() || containsIP(localIPs, ip.String())) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsIP(ips []string, target string) bool {
+	for _, ip := range ips {
+		if ip == target {
+			return true
+		}
+	}
+	return false
 }

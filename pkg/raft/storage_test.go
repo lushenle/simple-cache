@@ -2,6 +2,7 @@ package raft
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -86,6 +87,27 @@ func TestStorageSaveAndLoadSnapshot(t *testing.T) {
 	require.Equal(t, meta.LastIncludedTerm, gotMeta.LastIncludedTerm)
 	require.Equal(t, data, gotData)
 	require.True(t, st.HasSnapshot())
+}
+
+func TestStorageLoadEntriesToleratesTornTail(t *testing.T) {
+	st := NewStorage(filepath.Join(t.TempDir(), "raft.wal"))
+	require.NoError(t, st.AppendEntries([]LogEntry{
+		{Index: 1, Term: 1, Type: EntryTypeCommand, Data: []byte("a")},
+		{Index: 2, Term: 1, Type: EntryTypeCommand, Data: []byte("b")},
+	}))
+
+	// Simulate a crash mid-append: write half of the next entry.
+	f, err := os.OpenFile(st.path, os.O_WRONLY|os.O_APPEND, 0o644)
+	require.NoError(t, err)
+	partial := encodeEntryBinary(LogEntry{Index: 3, Term: 1, Type: EntryTypeCommand, Data: []byte("long-payload")})
+	_, err = f.Write(partial[:len(partial)/2])
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	entries, err := st.LoadEntries()
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	require.Equal(t, uint64(2), entries[1].Index)
 }
 
 func TestStorageCompactLog(t *testing.T) {

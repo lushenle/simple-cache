@@ -19,6 +19,26 @@ func TestNormalizePeerAddr(t *testing.T) {
 	})
 }
 
+func TestFindSelfAddr(t *testing.T) {
+	tests := []struct {
+		name  string
+		bind  string
+		peers []string
+		want  string
+	}{
+		{"ExplicitHostMatch", "127.0.0.1:9090", []string{"http://127.0.0.1:9090", "http://10.0.0.2:9090"}, "http://127.0.0.1:9090"},
+		{"BindAllLoopback", ":9090", []string{"http://127.0.0.1:9090", "http://10.0.0.2:9090"}, "http://127.0.0.1:9090"},
+		{"ExplicitHostMismatch", "127.0.0.1:9090", []string{"http://10.0.0.2:9090"}, ""},
+		{"PortMismatch", ":9090", []string{"http://127.0.0.1:9091"}, ""},
+		{"IPv6WildcardLoopback", "[::]:9090", []string{"http://[::1]:9090"}, "http://[::1]:9090"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, findSelfAddr(tt.bind, tt.peers))
+		})
+	}
+}
+
 func TestIsSelf(t *testing.T) {
 	tests := []struct {
 		name string
