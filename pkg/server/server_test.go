@@ -68,6 +68,7 @@ func TestGRPCServer(t *testing.T) {
 			true,
 			8,
 			logger,
+			"",
 		)
 		require.NoError(t, err)
 		defer node.Close()
@@ -105,6 +106,7 @@ func TestGRPCServer(t *testing.T) {
 			true,
 			8,
 			logger,
+			"",
 		)
 		require.NoError(t, err)
 		defer node.Close()
@@ -138,6 +140,7 @@ func TestSearchRejectsNonLeader(t *testing.T) {
 		true,
 		8,
 		logger,
+		"",
 	)
 	require.NoError(t, err)
 	defer node.Close()

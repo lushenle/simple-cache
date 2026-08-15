@@ -116,6 +116,7 @@ func main() {
 			cfg.SnapshotEnabled,
 			cfg.SnapshotThreshold,
 			logger,
+			cfg.AuthToken,
 		)
 		if err != nil {
 			logger.Fatal("failed to create raft node", zap.Error(err))
@@ -298,6 +299,8 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 				status = http.StatusPreconditionFailed
 			case raft.ErrPeerExists:
 				status = http.StatusConflict
+			case raft.ErrPeerChangeInFlight:
+				status = http.StatusConflict
 			case raft.ErrInvalidPeerChange:
 				status = http.StatusBadRequest
 			}
@@ -337,6 +340,8 @@ func runGatewayServer(ctx context.Context, waitGroup *errgroup.Group, svr *serve
 				status = http.StatusPreconditionFailed
 			case raft.ErrPeerNotFound:
 				status = http.StatusNotFound
+			case raft.ErrPeerChangeInFlight:
+				status = http.StatusConflict
 			case raft.ErrInvalidPeerChange:
 				status = http.StatusBadRequest
 			}

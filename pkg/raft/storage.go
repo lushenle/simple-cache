@@ -113,7 +113,11 @@ func loadEntriesBinary(data []byte) ([]LogEntry, error) {
 	for len(remaining) > 0 {
 		entry, rest, err := decodeEntryBinary(remaining)
 		if err != nil {
-			return entries, err
+			// Torn tail left by a crash mid-append: drop the partial record
+			// and keep the entries decoded so far. The binary format has no
+			// checksum, so an incomplete trailing record cannot be validated;
+			// treating it as truncation is the standard WAL recovery.
+			return entries, nil
 		}
 		entries = append(entries, entry)
 		remaining = rest
@@ -152,6 +156,9 @@ func (s *Storage) AppendEntries(entries []LogEntry) error {
 		return err
 	}
 
+	_, statErr := os.Stat(s.path)
+	isNew := os.IsNotExist(statErr)
+
 	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
@@ -161,8 +168,15 @@ func (s *Storage) AppendEntries(entries []LogEntry) error {
 	if err := appendEntriesBinary(f, entries); err != nil {
 		return err
 	}
-
-	return f.Sync()
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if isNew {
+		// Persist the directory entry so a freshly created WAL file survives
+		// a crash (appends to an existing file need no directory sync).
+		return syncDir(filepath.Dir(s.path))
+	}
+	return nil
 }
 
 func (s *Storage) LoadEntries() ([]LogEntry, error) {
