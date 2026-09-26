@@ -8,7 +8,7 @@
 | 项 | 状态 | 证据 |
 |---|---|---|
 | ReadIndex 协议（leader 侧） | ✅ 已实现 | `pkg/raft/node.go:1353` |
-| LRU 淘汰 | ✅ 已实现 | `pkg/cache/heap.go`、`pkg/config/config.go:41` |
+| LRU 淘汰 | ✅ 已实现 | `pkg/cache/cache.go:42-43`（lruMu + container/list）、`pkg/config/config.go:41` |
 | Watch 订阅（服务端+客户端） | ✅ 已实现 | `pkg/server/watch.go`（192 行完整实现） |
 | BatchSetStream | ✅ 已实现 | quality_report 确认客户端 SDK 支持 |
 | 异步 Size Metrics | ✅ 已实现 | `pkg/cache/cache.go:257`（30s 后台 goroutine） |
