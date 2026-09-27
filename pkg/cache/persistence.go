@@ -16,6 +16,8 @@ import (
 	"github.com/lushenle/simple-cache/pkg/common"
 	"github.com/lushenle/simple-cache/pkg/metrics"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 const (
@@ -545,6 +547,14 @@ func serializeValue(v any) (string, string) {
 		return val, "string"
 	case []byte:
 		return base64.StdEncoding.EncodeToString(val), "bytes"
+	case *anypb.Any:
+		// Preserve the exact proto bytes: a JSON round-trip would decode the
+		// Any into a map and lose the message type.
+		b, err := proto.Marshal(val)
+		if err != nil {
+			return fmt.Sprintf("%v", val), "other"
+		}
+		return base64.StdEncoding.EncodeToString(b), "anypb"
 	default:
 		// Try JSON marshal for complex types
 		b, err := json.Marshal(val)
@@ -565,6 +575,16 @@ func deserializeValue(data, valueType string) any {
 			return []byte(data)
 		}
 		return decoded
+	case "anypb":
+		decoded, err := base64.StdEncoding.DecodeString(data)
+		if err != nil {
+			return data
+		}
+		var a anypb.Any
+		if err := proto.Unmarshal(decoded, &a); err != nil {
+			return data
+		}
+		return &a
 	case "json":
 		var v any
 		if err := json.Unmarshal([]byte(data), &v); err != nil {

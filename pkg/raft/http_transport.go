@@ -34,6 +34,34 @@ type HTTPTransport struct {
 	peers     []string
 	node      *Node
 	httpSrv   *http.Server
+
+	// blocked is a test-only hook for chaos tests: outbound raft messages
+	// to peer addresses in this set are dropped, simulating a network
+	// partition. nil (production) means no-op.
+	blocked map[string]bool
+}
+
+// blockPeer drops outbound raft messages to the given peer (test-only).
+func (t *HTTPTransport) blockPeer(addr string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.blocked == nil {
+		t.blocked = make(map[string]bool)
+	}
+	t.blocked[addr] = true
+}
+
+// unblockPeer restores delivery to the given peer (test-only).
+func (t *HTTPTransport) unblockPeer(addr string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.blocked, addr)
+}
+
+func (t *HTTPTransport) isBlocked(peer string) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.blocked[peer]
 }
 
 // Request body limits: raft RPCs are small; InstallSnapshot chunks are
@@ -167,14 +195,23 @@ func (t *HTTPTransport) Start(node *Node) {
 
 // Close gracefully shuts down the raft HTTP server.
 func (t *HTTPTransport) Close() {
-	if t.httpSrv != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = t.httpSrv.Shutdown(ctx)
+	if t.httpSrv == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := t.httpSrv.Shutdown(ctx); err != nil {
+		// Graceful shutdown timed out (e.g. peers still hold keep-alive
+		// connections): force-close so the listener is released and the
+		// address can be rebound, e.g. by a restarted node.
+		_ = t.httpSrv.Close()
 	}
 }
 
 func (t *HTTPTransport) sendAppend(ctx context.Context, peer string, req AppendEntriesReq) (AppendEntriesResp, error) {
+	if t.isBlocked(peer) {
+		return AppendEntriesResp{}, fmt.Errorf("partitioned from %s", peer)
+	}
 	b, err := json.Marshal(req)
 	if err != nil {
 		return AppendEntriesResp{}, err
@@ -213,6 +250,9 @@ func (t *HTTPTransport) sendAppend(ctx context.Context, peer string, req AppendE
 }
 
 func (t *HTTPTransport) sendInstallSnapshot(ctx context.Context, peer string, req InstallSnapshotReq) (InstallSnapshotResp, error) {
+	if t.isBlocked(peer) {
+		return InstallSnapshotResp{}, fmt.Errorf("partitioned from %s", peer)
+	}
 	b, err := json.Marshal(req)
 	if err != nil {
 		return InstallSnapshotResp{}, err
@@ -317,6 +357,9 @@ func (t *HTTPTransport) broadcastVote(req RequestVoteReq) int {
 }
 
 func (t *HTTPTransport) sendVote(ctx context.Context, peer string, req RequestVoteReq) (RequestVoteResp, error) {
+	if t.isBlocked(peer) {
+		return RequestVoteResp{}, fmt.Errorf("partitioned from %s", peer)
+	}
 	b, err := json.Marshal(req)
 	if err != nil {
 		return RequestVoteResp{}, err

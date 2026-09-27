@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -63,13 +64,24 @@ func repoRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 }
 
+// allocatedPorts tracks ports handed out by freeAddr so the same port is
+// never assigned to two nodes in one test run (the kernel can recycle an
+// ephemeral port immediately after the probe listener closes it).
+var allocatedPorts sync.Map
+
 func freeAddr(t *testing.T) string {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := l.Addr().String()
-	require.NoError(t, l.Close())
-	return addr
+	for i := 0; i < 100; i++ {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		addr := l.Addr().String()
+		require.NoError(t, l.Close())
+		if _, loaded := allocatedPorts.LoadOrStore(addr, struct{}{}); !loaded {
+			return addr
+		}
+	}
+	t.Fatal("could not allocate a unique free port")
+	return ""
 }
 
 func writeConfig(t *testing.T, cfg *config.Config, dir, name string) string {
