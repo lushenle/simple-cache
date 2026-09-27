@@ -21,8 +21,10 @@ The project is a production-hardened Raft-based distributed cache with:
 - Follower reads not yet implemented (leader still single read bottleneck)
 - No OpenTelemetry distributed tracing
 - WAL uses JSON encoding (slow for large values)
-- No eviction policy beyond TTL
 - Single mutex serializes all Raft operations
+- No chaos/fault-injection tests
+
+> 详细优化方案见 [docs/optimization-plan.md](docs/optimization-plan.md)。
 
 ## Roadmap
 
@@ -75,6 +77,8 @@ Implementation plan:
 
 ### 2.3 Enhanced Metrics
 
+**Status**: 大部分已完成（snapshot age gauge、pending entries gauge、操作延迟直方图）。剩余两项：per-peer RTT 直方图、slow query 计数器，已移入 [docs/optimization-plan.md](docs/optimization-plan.md) 的 Quick Wins。
+
 **Problem**: Some metric gaps and N+1 query problem.
 
 **Solution**:
@@ -117,7 +121,9 @@ Implementation plan:
 
 **Impact**: 10-100x throughput improvement for batch writes.
 
-### 3.3 Async Size Metrics
+### 3.3 Async Size Metrics ✅ (Implemented)
+
+**Status**: 已实现 —— `sizeMetricsWorker` 后台 goroutine 每 30s 更新（`pkg/cache/cache.go`），不再持有写锁。
 
 **Problem**: `updateSizeMetrics()` runs under write lock, blocking all operations.
 
@@ -172,7 +178,7 @@ Implementation plan:
 
 **Files**: `pkg/cache/cache.go`, `pkg/cache/get.go`, `pkg/cache/set.go`, `pkg/cache/del.go`, `pkg/cache/reset.go`, `pkg/cache/metrics.go`, `pkg/config/config.go`, `pkg/cmd/main.go`
 
-### 4.2 Watch / Subscribe (Proto + Server Stub ✅)
+### 4.2 Watch / Subscribe ✅ (Implemented)
 
 **Problem**: No way for clients to subscribe to cache changes.
 
