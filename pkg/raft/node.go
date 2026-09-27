@@ -1391,6 +1391,28 @@ func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
 	}
 }
 
+// WaitApplied blocks until the state machine has applied at least idx or the
+// context is cancelled. Follower reads use it to wait until a read index
+// obtained from the leader is reflected in the local state machine.
+func (n *Node) WaitApplied(ctx context.Context, idx uint64) error {
+	for {
+		n.mu.Lock()
+		applied := n.lastApply
+		n.mu.Unlock()
+		if n.applyFailed() {
+			return errors.New("state machine apply failed")
+		}
+		if applied >= idx {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
 // heartbeatRound sends an empty AppendEntries (heartbeat) to all followers
 // and waits for a majority to acknowledge within the context deadline.
 func (n *Node) heartbeatRound(ctx context.Context) error {

@@ -154,3 +154,15 @@ func TestSearchRejectsNonLeader(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, codes.FailedPrecondition, st.Code())
 }
+
+func TestReadIndexSingleModeUnavailable(t *testing.T) {
+	plugin := log.NewStdoutPlugin(zapcore.DebugLevel)
+	logger := log.NewLogger(plugin)
+	srv := New(cache.New(time.Second*3, logger), "test-node")
+
+	_, err := srv.ReadIndex(context.Background(), &pb.ReadIndexRequest{})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.FailedPrecondition, st.Code())
+}

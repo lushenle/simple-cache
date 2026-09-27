@@ -11,6 +11,7 @@ import "expire_key.proto";
 import "dump.proto";
 import "batch_set.proto";
 import "watch.proto";
+import "read_index.proto";
 
 import "google/api/annotations.proto";
 import "protoc-gen-openapiv2/options/annotations.proto";
@@ -143,6 +144,10 @@ service CacheService {
           get: "/v1/watch"
       };
   }
+
+  // ReadIndex returns a safe read index from the leader. Internal RPC used
+  // by followers to serve linearizable reads without forwarding the request.
+  rpc ReadIndex(ReadIndexRequest) returns (ReadIndexResponse);
 
   rpc Load(LoadRequest) returns (LoadResponse) {
       option (google.api.http) = {

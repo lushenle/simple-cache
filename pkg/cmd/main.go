@@ -136,6 +136,10 @@ func main() {
 	if cfg.PeerAddresses != nil {
 		srv.SetPeerMap(cfg.PeerAddresses)
 	}
+	srv.SetReadPolicy(cfg.ReadPolicy)
+	if cfg.EnableTLS {
+		srv.SetTLSForLeaderDial(cfg.TLSCertFile)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	waitGroup, ctx := errgroup.WithContext(ctx)
