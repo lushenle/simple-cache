@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func TestDumpAndLoadBinary(t *testing.T) {
@@ -355,4 +356,37 @@ func TestDecodeBinaryDumpV1Compatibility(t *testing.T) {
 		assert.Equal(t, "string", decoded[i].ValueType, "v1 entries should default to string type")
 		assert.False(t, decoded[i].HasExpiration)
 	}
+}
+
+// TestDumpAndLoadPreservesAnyPBValue verifies that values stored as
+// *anypb.Any survive a dump/load round-trip with their exact proto bytes.
+// A plain JSON round-trip would decode the Any into a map and lose the
+// message type (see serializeValue/deserializeValue).
+func TestDumpAndLoadPreservesAnyPBValue(t *testing.T) {
+	logger := zap.NewNop()
+	c := New(time.Minute, logger)
+	defer c.Close()
+
+	anyVal := &anypb.Any{
+		TypeUrl: "type.googleapis.com/google.protobuf.StringValue",
+		Value:   []byte{0x0A, 0x02, 'v', '0'},
+	}
+	require.NoError(t, c.Set("any-key", anyVal, ""))
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "cache-node1.dump")
+	_, err := c.Dump("node1", "binary", path)
+	require.NoError(t, err)
+
+	c2 := New(time.Minute, logger)
+	defer c2.Close()
+	_, err = c2.Load("node1", path)
+	require.NoError(t, err)
+
+	val, found := c2.Get("any-key")
+	require.True(t, found)
+	restored, ok := val.(*anypb.Any)
+	require.True(t, ok, "restored value must be *anypb.Any, got %T", val)
+	assert.Equal(t, anyVal.TypeUrl, restored.TypeUrl)
+	assert.Equal(t, anyVal.Value, restored.Value)
 }

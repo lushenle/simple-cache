@@ -115,17 +115,28 @@ func waitForLeader(t *testing.T, nodes ...*Node) *Node {
 func submitStable(t *testing.T, leader *Node, cmd interface{}) interface{} {
 	t.Helper()
 	var resp interface{}
-	waitForCondition(t, func() bool {
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
 		var err error
 		resp, err = leader.Submit(context.Background(), cmd)
-		return err == nil
-	})
-	return resp
+		if err == nil {
+			return resp
+		}
+		lastErr = err
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("submit never succeeded, last error: %v", lastErr)
+	return nil
 }
 
 func waitForCondition(t *testing.T, fn func() bool) {
+	waitForConditionTimeout(t, 5*time.Second, fn)
+}
+
+func waitForConditionTimeout(t *testing.T, timeout time.Duration, fn func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if fn() {
 			return
