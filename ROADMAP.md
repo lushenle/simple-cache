@@ -9,6 +9,8 @@ The project is a production-hardened Raft-based distributed cache with:
 - gRPC + REST dual protocol
 - Client auto-failover (NewCluster) + leader discovery
 - Leader Lease → ReadIndex protocol for linearizable reads
+- Follower reads (read_policy=follower) for horizontal read scaling
+- OpenTelemetry distributed tracing (OTLP, opt-in)
 - Memory limits (max_keys, max_value_size) + value size validation
 - Configuration validation with env var overrides
 - Graceful leadership transfer (POST /cluster/stepdown)
@@ -18,9 +20,7 @@ The project is a production-hardened Raft-based distributed cache with:
 - Structured logging (zap + lumberjack)
 
 ### Known Limitations
-- Follower reads not yet implemented (leader still single read bottleneck)
-- No OpenTelemetry distributed tracing
-- WAL uses JSON encoding (slow for large values)
+- Snapshot file uses JSON/base64 encoding (bloat on large caches)
 - Single mutex serializes all Raft operations
 - No chaos/fault-injection tests
 
@@ -94,7 +94,9 @@ Implementation plan:
 
 ## Phase 3: Performance & Operations (3-4 weeks)
 
-### 3.1 WAL Binary Encoding
+### 3.1 WAL Binary Encoding ✅ (Implemented)
+
+**Status**: 已实现（#14）——WAL 追加/加载/重写均为二进制格式，`LoadEntries()` 自动兼容旧 JSON 格式。
 
 **Problem**: WAL uses JSON encoding (slow, bloated for binary values).
 

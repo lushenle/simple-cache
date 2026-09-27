@@ -15,7 +15,8 @@
 | 增强 Metrics | ⚠️ 大部分完成 | 缺 per-peer RTT、slow query 计数 |
 | Follower Reads | ❌ 未实现 | 所有读走 leader（`pkg/server/server.go:285` `checkLeaderRead`） |
 | OpenTelemetry 追踪 | ❌ 未实现 | go.mod 无 otel 依赖 |
-| WAL 二进制编码 | ❌ 未实现 | `pkg/raft/storage.go:293-315` 仍为 JSON |
+| WAL 二进制编码 | ✅ 已实现 | `pkg/raft/storage.go`（#14 引入，追加/加载/重写均二进制，兼容旧 JSON） |
+| 快照文件编码 | ⚠️ 部分遗留 | `SaveSnapshot` 用 JSON，Data 大数组被 base64 膨胀 ~33% |
 | Raft 锁拆分 | ❌ 未实现 | `pkg/raft/node.go:57` 单 `mu sync.Mutex` |
 | Chaos 测试 | ❌ 未实现 | `test/e2e/` 无 chaos 测试 |
 
@@ -59,18 +60,11 @@
 
 ---
 
-## 3. WAL 二进制编码
+## 3. WAL 二进制编码 ✅ (Already Implemented)
 
-**问题**：WAL 用 JSON（`storage.go:293-315`、`types.go` LogEntry json tag），大 value 场景编码开销大。
+**Status**: 已实现（`3e84a78 feat/production readiness (#14)`）——WAL 追加（`appendEntriesBinary`）、加载（`loadEntriesBinary`）、重写（`RewriteEntries`）均为二进制格式，`LoadEntries()` 通过首字节（`{` = JSON）自动兼容旧格式。原先方案中的判断有误：`storage.go:293-315` 的 JSON 是 `.meta`/`.snapshot` 持久化文件，不是 WAL。
 
-**方案**：
-1. `LogEntry` 改为长度前缀二进制：`[magic(4B)][version(1B)][crc32(4B)][len(4B)][payload]`
-2. payload 用 protobuf 或手写 varint 编码（Index/Term 用 varint，Data 直接放原始字节）
-3. `LoadEntries()` 通过 magic 自动探测新旧格式，旧 WAL 继续可读（一次性迁移）
-
-**涉及文件**：`pkg/raft/types.go`、`pkg/raft/storage.go`
-
-**验收标准**：旧格式 WAL 可正常加载；`bench/` 大 value 写吞吐提升 5-10x。预计 3-5 天。
+**剩余遗留（移入 Quick Wins）**：`SaveSnapshot` 用 JSON 序列化 `snapshotFile{Data}`，大 FSM dump 被 base64 膨胀 ~33% 且多一次编解码。可改为 `[JSON meta 头][原始二进制 data]` 布局。
 
 ---
 
@@ -107,6 +101,7 @@
 
 | 项 | 问题 | 方案 |
 |---|---|---|
+| 快照文件 base64 膨胀 | `SaveSnapshot` JSON 序列化大 Data 数组，膨胀 ~33% + 编解码开销 | 改为 `[JSON meta 头][原始二进制 data]` 布局，兼容旧格式读取 |
 | 补充 2 个缺失指标 | ROADMAP 2.3 遗留 | `raft_peer_rtt_seconds` 直方图；slow query 计数器（>100ms/500ms/1s 桶） |
 | Dump 持写锁 | 大缓存 Dump 阻塞读写（quality_report 已知风险） | 增量快照或写时复制，Dump 期间不阻塞 Set/Get |
 | 正则搜索 O(n) | 非前缀模式全树遍历（`pkg/cache/search.go:70`） | 已确认前缀模式走 `WalkPrefix` 优化；正则模式文档化限制即可，暂不改 |
@@ -115,16 +110,16 @@
 
 ## 实施顺序与预估
 
-| 优先级 | 项 | 工作量 | 风险 | 依赖 |
-|---|---|---|---|---|
-| P0 | 1. Follower Reads | 1-1.5 周 | 中（正确性） | 无 |
-| P1 | 2. OTel 追踪 | 1 周 | 低 | 无 |
-| P1 | 3. WAL 二进制编码 | 3-5 天 | 低-中（兼容性） | 无 |
-| P2 | 4. Raft 锁拆分 | 3-5 天 | 中（锁顺序） | 建议在 Chaos 测试后 |
-| P2 | 5. Chaos 测试 | 1 周 | 低 | 建议先于 4（先有测试再改锁） |
-| P3 | 6. Quick Wins | 2-3 天 | 低 | 无 |
+| 优先级 | 项 | 状态 | 工作量 | 风险 | 依赖 |
+|---|---|---|---|---|---|
+| P0 | 1. Follower Reads | ✅ 已合并 #23 | 1-1.5 周 | 中（正确性） | 无 |
+| P1 | 2. OTel 追踪 | ✅ 已合并 #24 | 1 周 | 低 | 无 |
+| P1 | 3. WAL 二进制编码 | ✅ 早已实现（#14） | - | - | - |
+| P2 | 5. Chaos 测试 | ⬜ 进行中 | 1 周 | 低 | 建议先于 4（先有测试再改锁） |
+| P2 | 4. Raft 锁拆分 | ⬜ | 3-5 天 | 中（锁顺序） | 建议在 Chaos 测试后 |
+| P3 | 6. Quick Wins | ⬜ | 2-3 天 | 低 | 无 |
 
-建议顺序：**1 → 2/3 → 5 → 4 → 6**。Chaos 测试先于锁拆分，为并发重构提供安全网。
+建议顺序：**1 → 2 → 5 → 4 → 6**。Chaos 测试先于锁拆分，为并发重构提供安全网。
 
 ## 本分支同步的文档更新
 
