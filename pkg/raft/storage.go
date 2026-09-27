@@ -3,6 +3,7 @@ package raft
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -148,6 +149,9 @@ func (s *Storage) AppendEntries(entries []LogEntry) error {
 	if len(entries) == 0 {
 		return nil
 	}
+
+	_, span := tracer.Start(context.Background(), "raft.WAL.Append")
+	defer span.End()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

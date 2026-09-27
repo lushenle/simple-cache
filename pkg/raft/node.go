@@ -13,6 +13,7 @@ import (
 
 	"github.com/lushenle/simple-cache/pkg/command"
 	"github.com/lushenle/simple-cache/pkg/metrics"
+	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -26,6 +27,8 @@ type SnapshotProvider interface {
 	Snapshot(nodeID string) ([]byte, error)
 	RestoreSnapshot(nodeID string, data []byte) error
 }
+
+var tracer = otel.Tracer("simple-cache")
 
 type applyResult struct {
 	resp interface{}
@@ -387,7 +390,10 @@ func (n *Node) startElection() {
 	n.resetElectionDeadline()
 }
 
-func (n *Node) Submit(cmd interface{}) (interface{}, error) {
+func (n *Node) Submit(ctx context.Context, cmd interface{}) (interface{}, error) {
+	_, span := tracer.Start(ctx, "raft.Submit")
+	defer span.End()
+
 	if n.Role() != Leader {
 		return nil, ErrNotLeader{Leader: n.leaderID.Load().(string)}
 	}

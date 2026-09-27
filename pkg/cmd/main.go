@@ -24,6 +24,8 @@ import (
 	"github.com/lushenle/simple-cache/pkg/pb"
 	"github.com/lushenle/simple-cache/pkg/raft"
 	"github.com/lushenle/simple-cache/pkg/server"
+	"github.com/lushenle/simple-cache/pkg/tracing"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
 	"go.uber.org/zap"
@@ -71,6 +73,17 @@ func main() {
 		w := config.NewWatcher(cfgPath, acfg) // Fix: use cfgPath instead of hardcoded "config.yaml"
 		go w.Start(stop)
 	}
+
+	// OpenTelemetry tracing (no-op unless tracing_enabled).
+	tracingShutdown, err := tracing.Init(context.Background(), cfg.TracingEnabled, cfg.OTLPEndpoint, cfg.ServiceName)
+	if err != nil {
+		logger.Fatal("failed to initialize tracing", zap.Error(err))
+	}
+	defer func() {
+		if err := tracingShutdown(context.Background()); err != nil {
+			logger.Warn("tracing shutdown failed", zap.Error(err))
+		}
+	}()
 
 	metricsServer := &http.Server{Addr: cfg.MetricsAddr, Handler: metricsMux}
 	go func() {
@@ -160,6 +173,7 @@ func main() {
 	}
 	grpcOptions := []grpc.ServerOption{
 		grpc.UnaryInterceptor(server.UnaryAuthInterceptor(cfg.AuthToken)),
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 	}
 	if cfg.EnableTLS {
 		creds, err := credentials.NewServerTLSFromFile(cfg.TLSCertFile, cfg.TLSKeyFile)

@@ -60,3 +60,8 @@ eviction_policy: none # 淘汰策略："none"（拒绝写入）或 "lru"（淘�
 # - follower: 任意节点可服务读（ReadIndex 协议保证线性一致性），配合客户端
 #   WithReadFromFollowers 使用可水平扩展读吞吐
 read_policy: leader
+
+# OpenTelemetry 分布式追踪（默认关闭，开启时向 OTLP gRPC endpoint 导出 trace）
+tracing_enabled: false
+otlp_endpoint: "localhost:4317"
+service_name: "simple-cache"

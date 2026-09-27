@@ -17,6 +17,7 @@ import (
 
 	"github.com/lushenle/simple-cache/pkg/pb"
 	"github.com/lushenle/simple-cache/pkg/utils"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
@@ -100,6 +101,7 @@ func defaultOpts() *clientOpts {
 		dialOpts: []grpc.DialOption{
 			grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: 3 * time.Second}),
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 		},
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 	}
