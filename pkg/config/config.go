@@ -40,6 +40,9 @@ type Config struct {
 	MaxQPS            int               `yaml:"max_qps"`         // max requests/sec per client (0 = unlimited)
 	EvictionPolicy    string            `yaml:"eviction_policy"` // "none" or "lru" (default "none")
 	ReadPolicy        string            `yaml:"read_policy"`     // "leader" (default) or "follower"
+	TracingEnabled    bool              `yaml:"tracing_enabled"`
+	OTLPEndpoint      string            `yaml:"otlp_endpoint"`
+	ServiceName       string            `yaml:"service_name"`
 }
 
 func Default() *Config {
@@ -60,6 +63,9 @@ func Default() *Config {
 		AllowedOrigins:    nil,
 		SnapshotEnabled:   true,
 		SnapshotThreshold: 1024,
+		TracingEnabled:    false,
+		OTLPEndpoint:      "localhost:4317",
+		ServiceName:       "simple-cache",
 	}
 }
 
@@ -129,6 +135,12 @@ func (c *Config) OverrideFromEnv() {
 	}
 	if v := os.Getenv("SIMPLE_CACHE_READ_POLICY"); v != "" {
 		c.ReadPolicy = v
+	}
+	if v := os.Getenv("SIMPLE_CACHE_TRACING_ENABLED"); v != "" {
+		c.TracingEnabled = v == "true" || v == "1"
+	}
+	if v := os.Getenv("SIMPLE_CACHE_OTLP_ENDPOINT"); v != "" {
+		c.OTLPEndpoint = v
 	}
 }
 

@@ -117,7 +117,7 @@ func submitStable(t *testing.T, leader *Node, cmd interface{}) interface{} {
 	var resp interface{}
 	waitForCondition(t, func() bool {
 		var err error
-		resp, err = leader.Submit(cmd)
+		resp, err = leader.Submit(context.Background(), cmd)
 		return err == nil
 	})
 	return resp
@@ -181,7 +181,7 @@ func TestNodeReplicationAndFailover(t *testing.T) {
 	}
 
 	newLeader := waitForLeader(t, survivors...)
-	_, err = newLeader.Submit(&command.SetCommand{Key: "k2", Value: "v2"})
+	_, err = newLeader.Submit(context.Background(), &command.SetCommand{Key: "k2", Value: "v2"})
 	require.NoError(t, err)
 
 	waitForCondition(t, func() bool {
@@ -285,12 +285,12 @@ func TestNodeSubmitWithUnreachablePeerDoesNotBlockTooLong(t *testing.T) {
 	// stable, then time a single submit.
 	leader := waitForLeader(t, n1, n2)
 	waitForCondition(t, func() bool {
-		_, err = leader.Submit(&command.SetCommand{Key: "k-warmup", Value: "v"})
+		_, err = leader.Submit(context.Background(), &command.SetCommand{Key: "k-warmup", Value: "v"})
 		return err == nil
 	})
 
 	start := time.Now()
-	_, err = leader.Submit(&command.SetCommand{Key: "k-timeout", Value: "v"})
+	_, err = leader.Submit(context.Background(), &command.SetCommand{Key: "k-timeout", Value: "v"})
 	duration := time.Since(start)
 
 	require.NoError(t, err)
@@ -601,9 +601,9 @@ func TestRequestVoteLogComparison(t *testing.T) {
 	waitForLeader(t, node)
 
 	// Submit a few entries so the node has some log state.
-	_, err = node.Submit(&command.SetCommand{Key: "a", Value: "1"})
+	_, err = node.Submit(context.Background(), &command.SetCommand{Key: "a", Value: "1"})
 	require.NoError(t, err)
-	_, err = node.Submit(&command.SetCommand{Key: "b", Value: "2"})
+	_, err = node.Submit(context.Background(), &command.SetCommand{Key: "b", Value: "2"})
 	require.NoError(t, err)
 	waitForCondition(t, func() bool { return applier.Has("a") && applier.Has("b") })
 
@@ -718,7 +718,7 @@ func TestNodeAppendAfterSnapshot(t *testing.T) {
 
 	// Followers now have snapshotIndex > 0; incremental appends must work.
 	for i := 4; i < 8; i++ {
-		_, err = leader.Submit(&command.SetCommand{Key: fmt.Sprintf("k%d", i), Value: "v"})
+		_, err = leader.Submit(context.Background(), &command.SetCommand{Key: fmt.Sprintf("k%d", i), Value: "v"})
 		require.NoError(t, err)
 	}
 	waitForCondition(t, func() bool {

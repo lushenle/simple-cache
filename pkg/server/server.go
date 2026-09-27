@@ -17,6 +17,9 @@ import (
 	"github.com/lushenle/simple-cache/pkg/pb"
 	"github.com/lushenle/simple-cache/pkg/raft"
 	"github.com/lushenle/simple-cache/pkg/utils"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -128,6 +131,13 @@ type CacheService struct {
 	leaderConn *grpc.ClientConn
 	leaderCli  pb.CacheServiceClient
 	leaderAddr string
+}
+
+var tracer = otel.Tracer("simple-cache")
+
+// startSpan opens a span named after the operation, tagging the cache key.
+func startSpan(ctx context.Context, name, key string) (context.Context, trace.Span) {
+	return tracer.Start(ctx, name, trace.WithAttributes(attribute.String("cache.key", key)))
 }
 
 // New creates a CacheService in single-node mode.
@@ -405,17 +415,24 @@ func (s *CacheService) ReadIndex(ctx context.Context, req *pb.ReadIndexRequest) 
 }
 
 func (s *CacheService) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
+	ctx, span := startSpan(ctx, "cache.Get", req.Key)
+	defer span.End()
+
 	if err := s.checkRead(ctx); err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
 	if !s.rl.Allow(clientPeerAddr(ctx)) {
-		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
+		rlErr := status.Error(codes.ResourceExhausted, "rate limit exceeded")
+		span.RecordError(rlErr)
+		return nil, rlErr
 	}
 
 	value, found := s.fsm.Cache.Get(req.Key)
 
 	val, convErr := utils.ConvertToAnyPB(value)
 	if convErr != nil {
+		span.RecordError(convErr)
 		return &pb.GetResponse{Value: nil, Found: false}, status.Error(codes.InvalidArgument, convErr.Error())
 	}
 
@@ -423,8 +440,13 @@ func (s *CacheService) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResp
 }
 
 func (s *CacheService) Set(ctx context.Context, req *pb.SetRequest) (*pb.SetResponse, error) {
+	ctx, span := startSpan(ctx, "cache.Set", req.Key)
+	defer span.End()
+
 	if !s.rl.Allow(clientPeerAddr(ctx)) {
-		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
+		rlErr := status.Error(codes.ResourceExhausted, "rate limit exceeded")
+		span.RecordError(rlErr)
+		return nil, rlErr
 	}
 
 	cmd := &command.SetCommand{
@@ -435,11 +457,12 @@ func (s *CacheService) Set(ctx context.Context, req *pb.SetRequest) (*pb.SetResp
 	var resp interface{}
 	var err error
 	if s.node != nil {
-		resp, err = s.node.Submit(cmd)
+		resp, err = s.node.Submit(ctx, cmd)
 	} else {
 		resp, err = s.fsm.Apply(cmd)
 	}
 	if err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
 	if s.watchSvc != nil {
@@ -449,15 +472,20 @@ func (s *CacheService) Set(ctx context.Context, req *pb.SetRequest) (*pb.SetResp
 }
 
 func (s *CacheService) Del(ctx context.Context, req *pb.DelRequest) (*pb.DelResponse, error) {
+	ctx, span := startSpan(ctx, "cache.Del", req.Key)
+	defer span.End()
+
 	if !s.rl.Allow(clientPeerAddr(ctx)) {
-		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
+		rlErr := status.Error(codes.ResourceExhausted, "rate limit exceeded")
+		span.RecordError(rlErr)
+		return nil, rlErr
 	}
 
 	cmd := &command.DelCommand{Key: req.Key}
 	var resp interface{}
 	var err error
 	if s.node != nil {
-		resp, err = s.node.Submit(cmd)
+		resp, err = s.node.Submit(ctx, cmd)
 	} else {
 		resp, err = s.fsm.Apply(cmd)
 	}
@@ -479,7 +507,7 @@ func (s *CacheService) ExpireKey(ctx context.Context, req *pb.ExpireKeyRequest) 
 	var resp interface{}
 	var err error
 	if s.node != nil {
-		resp, err = s.node.Submit(cmd)
+		resp, err = s.node.Submit(ctx, cmd)
 	} else {
 		resp, err = s.fsm.Apply(cmd)
 	}
@@ -501,7 +529,7 @@ func (s *CacheService) Reset(ctx context.Context, req *pb.ResetRequest) (*pb.Res
 	var resp interface{}
 	var err error
 	if s.node != nil {
-		resp, err = s.node.Submit(cmd)
+		resp, err = s.node.Submit(ctx, cmd)
 	} else {
 		resp, err = s.fsm.Apply(cmd)
 	}
@@ -605,7 +633,7 @@ func (s *CacheService) BatchSet(stream pb.CacheService_BatchSetServer) error {
 		}
 		var errApply error
 		if s.node != nil {
-			_, errApply = s.node.Submit(cmd)
+			_, errApply = s.node.Submit(stream.Context(), cmd)
 		} else {
 			_, errApply = s.fsm.Apply(cmd)
 		}

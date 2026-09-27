@@ -135,6 +135,26 @@ func (t *HTTPTransport) Start(node *Node) {
 		w.WriteHeader(http.StatusOK)
 		w.Write(out)
 	})
+	// /healthz mirrors the admin probe surface needed by cluster clients for
+	// leader discovery: role and leader_id. Served without auth, like the
+	// admin server's /healthz.
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		probe := struct {
+			Status   string `json:"status"`
+			Mode     string `json:"mode"`
+			Ready    bool   `json:"ready"`
+			Role     string `json:"role"`
+			LeaderID string `json:"leader_id,omitempty"`
+		}{
+			Status:   "ok",
+			Mode:     "distributed",
+			Ready:    true,
+			Role:     string(node.Role()),
+			LeaderID: node.LeaderID(),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(probe)
+	})
 	t.httpSrv = &http.Server{Addr: t.addr, Handler: mux}
 	go func() {
 		if err := t.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
