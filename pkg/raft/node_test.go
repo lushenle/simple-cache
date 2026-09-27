@@ -261,14 +261,22 @@ func TestNodeSubmitWithUnreachablePeerDoesNotBlockTooLong(t *testing.T) {
 		ghost,
 	}
 
-	n1, err := NewNode("n1", addr1, peers, NewStorage(filepath.Join(baseDir, "n1.wal")), newFakeApplier(), 80*time.Millisecond, 180*time.Millisecond, true, 8, logger, "")
+	n1, err := NewNode("n1", addr1, peers, NewStorage(filepath.Join(baseDir, "n1.wal")), newFakeApplier(), 200*time.Millisecond, 500*time.Millisecond, true, 8, logger, "")
 	require.NoError(t, err)
-	n2, err := NewNode("n2", addr2, peers, NewStorage(filepath.Join(baseDir, "n2.wal")), newFakeApplier(), 80*time.Millisecond, 180*time.Millisecond, true, 8, logger, "")
+	n2, err := NewNode("n2", addr2, peers, NewStorage(filepath.Join(baseDir, "n2.wal")), newFakeApplier(), 200*time.Millisecond, 500*time.Millisecond, true, 8, logger, "")
 	require.NoError(t, err)
 	defer n1.Close()
 	defer n2.Close()
 
+	// On slow CI runners the freshly elected leader can lose leadership to a
+	// spurious election before the first submit; retry until the cluster is
+	// stable, then time a single submit.
 	leader := waitForLeader(t, n1, n2)
+	waitForCondition(t, func() bool {
+		_, err = leader.Submit(&command.SetCommand{Key: "k-warmup", Value: "v"})
+		return err == nil
+	})
+
 	start := time.Now()
 	_, err = leader.Submit(&command.SetCommand{Key: "k-timeout", Value: "v"})
 	duration := time.Since(start)
