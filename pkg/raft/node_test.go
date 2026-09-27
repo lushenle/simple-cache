@@ -891,3 +891,58 @@ func TestReadIndexRejectsDeposedLeader(t *testing.T) {
 	// The deposed leader must have stepped down.
 	require.NotEqual(t, Leader, leader.Role())
 }
+
+func TestWaitApplied(t *testing.T) {
+	logger := zap.NewNop()
+	baseDir := t.TempDir()
+
+	addr1 := freeAddr(t)
+	addr2 := freeAddr(t)
+	addr3 := freeAddr(t)
+	peers := []string{
+		"http://" + addr1,
+		"http://" + addr2,
+		"http://" + addr3,
+	}
+
+	applier1 := newFakeApplier()
+	applier2 := newFakeApplier()
+	applier3 := newFakeApplier()
+
+	n1, err := NewNode("n1", addr1, peers, NewStorage(filepath.Join(baseDir, "n1.wal")), applier1, 80*time.Millisecond, 180*time.Millisecond, true, 8, logger, "")
+	require.NoError(t, err)
+	n2, err := NewNode("n2", addr2, peers, NewStorage(filepath.Join(baseDir, "n2.wal")), applier2, 80*time.Millisecond, 180*time.Millisecond, true, 8, logger, "")
+	require.NoError(t, err)
+	n3, err := NewNode("n3", addr3, peers, NewStorage(filepath.Join(baseDir, "n3.wal")), applier3, 80*time.Millisecond, 180*time.Millisecond, true, 8, logger, "")
+	require.NoError(t, err)
+	defer n1.Close()
+	defer n2.Close()
+	defer n3.Close()
+
+	leader := waitForLeader(t, n1, n2, n3)
+	_, err = leader.Submit(&command.SetCommand{Key: "k-wait", Value: "v"})
+	require.NoError(t, err)
+	waitForCondition(t, func() bool {
+		return applier1.Has("k-wait") && applier2.Has("k-wait") && applier3.Has("k-wait")
+	})
+
+	var follower *Node
+	for _, n := range []*Node{n1, n2, n3} {
+		if n != leader {
+			follower = n
+			break
+		}
+	}
+	require.NotNil(t, follower)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	idx, err := leader.ReadIndex(ctx)
+	require.NoError(t, err)
+	require.NoError(t, follower.WaitApplied(ctx, idx))
+
+	// A cancelled context must return promptly instead of blocking.
+	canceledCtx, cancel2 := context.WithCancel(context.Background())
+	cancel2()
+	require.Error(t, follower.WaitApplied(canceledCtx, idx+1000))
+}

@@ -54,3 +54,9 @@ max_keys: 0 # 最大 key 数，0 = 不限
 max_value_size: 0 # 单 value 最大字节数，0 = 不限
 max_qps: 0 # 每客户端每秒请求数限制，0 = 不限
 eviction_policy: none # 淘汰策略："none"（拒绝写入）或 "lru"（淘汰最近最少使用）
+
+# 读策略（distributed 模式生效）
+# - leader: 所有读由 leader 处理（默认）
+# - follower: 任意节点可服务读（ReadIndex 协议保证线性一致性），配合客户端
+#   WithReadFromFollowers 使用可水平扩展读吞吐
+read_policy: leader

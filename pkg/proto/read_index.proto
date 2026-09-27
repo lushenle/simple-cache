@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package pb;
+
+option go_package = "github.com/lushenle/simple-cache/pkg/pb";
+
+// ReadIndexRequest asks the leader for a safe read index.
+// Internal RPC used by followers to serve linearizable reads.
+message ReadIndexRequest {}
+
+message ReadIndexResponse {
+  // The leader's commit index at quorum-confirmation time. A follower can
+  // serve reads locally once its lastApplied >= this index.
+  uint64 index = 1;
+}

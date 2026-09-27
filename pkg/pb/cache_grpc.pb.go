@@ -29,6 +29,7 @@ const (
 	CacheService_BatchSet_FullMethodName  = "/pb.CacheService/BatchSet"
 	CacheService_Watch_FullMethodName     = "/pb.CacheService/Watch"
 	CacheService_Load_FullMethodName      = "/pb.CacheService/Load"
+	CacheService_ReadIndex_FullMethodName = "/pb.CacheService/ReadIndex"
 )
 
 // CacheServiceClient is the client API for CacheService service.
@@ -53,6 +54,9 @@ type CacheServiceClient interface {
 	// requested pattern.
 	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchEvent], error)
 	Load(ctx context.Context, in *LoadRequest, opts ...grpc.CallOption) (*LoadResponse, error)
+	// ReadIndex returns a safe read index from the leader. Internal RPC used
+	// by followers to serve linearizable reads without forwarding the request.
+	ReadIndex(ctx context.Context, in *ReadIndexRequest, opts ...grpc.CallOption) (*ReadIndexResponse, error)
 }
 
 type cacheServiceClient struct {
@@ -175,6 +179,16 @@ func (c *cacheServiceClient) Load(ctx context.Context, in *LoadRequest, opts ...
 	return out, nil
 }
 
+func (c *cacheServiceClient) ReadIndex(ctx context.Context, in *ReadIndexRequest, opts ...grpc.CallOption) (*ReadIndexResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadIndexResponse)
+	err := c.cc.Invoke(ctx, CacheService_ReadIndex_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CacheServiceServer is the server API for CacheService service.
 // All implementations must embed UnimplementedCacheServiceServer
 // for forward compatibility.
@@ -197,6 +211,9 @@ type CacheServiceServer interface {
 	// requested pattern.
 	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchEvent]) error
 	Load(context.Context, *LoadRequest) (*LoadResponse, error)
+	// ReadIndex returns a safe read index from the leader. Internal RPC used
+	// by followers to serve linearizable reads without forwarding the request.
+	ReadIndex(context.Context, *ReadIndexRequest) (*ReadIndexResponse, error)
 	mustEmbedUnimplementedCacheServiceServer()
 }
 
@@ -236,6 +253,9 @@ func (UnimplementedCacheServiceServer) Watch(*WatchRequest, grpc.ServerStreaming
 }
 func (UnimplementedCacheServiceServer) Load(context.Context, *LoadRequest) (*LoadResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Load not implemented")
+}
+func (UnimplementedCacheServiceServer) ReadIndex(context.Context, *ReadIndexRequest) (*ReadIndexResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReadIndex not implemented")
 }
 func (UnimplementedCacheServiceServer) mustEmbedUnimplementedCacheServiceServer() {}
 func (UnimplementedCacheServiceServer) testEmbeddedByValue()                      {}
@@ -420,6 +440,24 @@ func _CacheService_Load_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CacheService_ReadIndex_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadIndexRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CacheServiceServer).ReadIndex(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CacheService_ReadIndex_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CacheServiceServer).ReadIndex(ctx, req.(*ReadIndexRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CacheService_ServiceDesc is the grpc.ServiceDesc for CacheService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -458,6 +496,10 @@ var CacheService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Load",
 			Handler:    _CacheService_Load_Handler,
+		},
+		{
+			MethodName: "ReadIndex",
+			Handler:    _CacheService_ReadIndex_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

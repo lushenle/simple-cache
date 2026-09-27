@@ -2,7 +2,11 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
 	"io"
+	"os"
 	"sync"
 	"time"
 
@@ -13,7 +17,10 @@ import (
 	"github.com/lushenle/simple-cache/pkg/pb"
 	"github.com/lushenle/simple-cache/pkg/raft"
 	"github.com/lushenle/simple-cache/pkg/utils"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
@@ -113,6 +120,14 @@ type CacheService struct {
 	peerMap  map[string]string // nodeID → gRPC address for all known peers
 	rl       *simpleRateLimiter
 	watchSvc *WatchService
+
+	readPolicy  string // "leader" (default) or "follower"
+	tlsCertFile string // CA cert for server-to-leader gRPC dial (empty = insecure)
+
+	leaderMu   sync.Mutex
+	leaderConn *grpc.ClientConn
+	leaderCli  pb.CacheServiceClient
+	leaderAddr string
 }
 
 // New creates a CacheService in single-node mode.
@@ -145,6 +160,15 @@ func (s *CacheService) SetPeerMap(m map[string]string) {
 }
 
 // UseRaft attaches a Raft node for distributed mode.
+// SetReadPolicy configures how reads are served: "leader" (default) routes
+// all reads through the leader, "follower" allows any node to serve reads
+// using the ReadIndex protocol.
+func (s *CacheService) SetReadPolicy(policy string) { s.readPolicy = policy }
+
+// SetTLSForLeaderDial configures the CA certificate used when a follower
+// dials the leader's gRPC endpoint (required only when cluster TLS is on).
+func (s *CacheService) SetTLSForLeaderDial(certFile string) { s.tlsCertFile = certFile }
+
 func (s *CacheService) UseRaft(n *raft.Node) {
 	s.node = n
 }
@@ -282,8 +306,106 @@ func (s *CacheService) checkLeaderRead(ctx context.Context) error {
 	return nil
 }
 
+// checkRead returns nil if the node can safely serve a linearizable read.
+// With read_policy=follower, any node serves reads: a follower asks the
+// leader for a safe read index and waits until the local state machine has
+// applied it.
+func (s *CacheService) checkRead(ctx context.Context) error {
+	if s.node == nil {
+		return nil // single mode
+	}
+	if s.readPolicy != "follower" {
+		return s.checkLeaderRead(ctx)
+	}
+	riCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	idx, err := s.getReadIndex(riCtx)
+	if err != nil {
+		return err
+	}
+	if err := s.node.WaitApplied(riCtx, idx); err != nil {
+		return status.Errorf(codes.FailedPrecondition, "wait apply read index %d: %v", idx, err)
+	}
+	return nil
+}
+
+// getReadIndex returns a safe read index: locally via ReadIndex when this
+// node is the leader, otherwise by asking the leader over gRPC.
+func (s *CacheService) getReadIndex(ctx context.Context) (uint64, error) {
+	if s.node.Role() == raft.Leader {
+		return s.node.ReadIndex(ctx)
+	}
+	leaderID := s.node.LeaderID()
+	addr, ok := s.peerMap[leaderID]
+	if !ok {
+		return 0, status.Errorf(codes.FailedPrecondition, "no gRPC address for leader %q", leaderID)
+	}
+	cli, err := s.leaderClient(addr)
+	if err != nil {
+		return 0, status.Errorf(codes.Internal, "dial leader %s: %v", addr, err)
+	}
+	resp, err := cli.ReadIndex(ctx, &pb.ReadIndexRequest{})
+	if err != nil {
+		return 0, err
+	}
+	return resp.Index, nil
+}
+
+// leaderClient returns a cached gRPC client for the leader, re-dialing when
+// the leader address changes.
+func (s *CacheService) leaderClient(addr string) (pb.CacheServiceClient, error) {
+	s.leaderMu.Lock()
+	defer s.leaderMu.Unlock()
+	if s.leaderCli != nil && s.leaderAddr == addr {
+		return s.leaderCli, nil
+	}
+	if s.leaderConn != nil {
+		s.leaderConn.Close()
+		s.leaderConn = nil
+		s.leaderCli = nil
+	}
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	if s.tlsCertFile != "" {
+		pool := x509.NewCertPool()
+		pemData, err := os.ReadFile(s.tlsCertFile)
+		if err != nil {
+			return nil, fmt.Errorf("read tls cert: %w", err)
+		}
+		if !pool.AppendCertsFromPEM(pemData) {
+			return nil, fmt.Errorf("failed to append certs from %s", s.tlsCertFile)
+		}
+		opts = []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+			MinVersion: tls.VersionTLS12,
+			RootCAs:    pool,
+		}))}
+	}
+	conn, err := grpc.NewClient(addr, opts...)
+	if err != nil {
+		return nil, err
+	}
+	s.leaderConn = conn
+	s.leaderCli = pb.NewCacheServiceClient(conn)
+	s.leaderAddr = addr
+	return s.leaderCli, nil
+}
+
+// ReadIndex returns a safe read index from the leader for follower reads.
+func (s *CacheService) ReadIndex(ctx context.Context, req *pb.ReadIndexRequest) (*pb.ReadIndexResponse, error) {
+	if s.node == nil {
+		return nil, status.Error(codes.FailedPrecondition, "read index unavailable in single mode")
+	}
+	idx, err := s.node.ReadIndex(ctx)
+	if err != nil {
+		if e, ok := err.(raft.ErrNotLeader); ok {
+			return nil, status.Errorf(codes.FailedPrecondition, "not leader: %s", e.Leader)
+		}
+		return nil, status.Errorf(codes.Internal, "read index failed: %v", err)
+	}
+	return &pb.ReadIndexResponse{Index: idx}, nil
+}
+
 func (s *CacheService) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
-	if err := s.checkLeaderRead(ctx); err != nil {
+	if err := s.checkRead(ctx); err != nil {
 		return nil, err
 	}
 	if !s.rl.Allow(clientPeerAddr(ctx)) {
@@ -390,7 +512,7 @@ func (s *CacheService) Reset(ctx context.Context, req *pb.ResetRequest) (*pb.Res
 }
 
 func (s *CacheService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.SearchResponse, error) {
-	if err := s.checkLeaderRead(ctx); err != nil {
+	if err := s.checkRead(ctx); err != nil {
 		return nil, err
 	}
 	if !s.rl.Allow(clientPeerAddr(ctx)) {

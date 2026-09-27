@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lushenle/simple-cache/pkg/pb"
@@ -62,6 +63,12 @@ type Client struct {
 	conn   *grpc.ClientConn
 	client pb.CacheServiceClient
 
+	// ---- follower read pool (readFromFollowers mode) ----
+	readFromFollowers bool
+	readConns         []*grpc.ClientConn
+	readClients       []pb.CacheServiceClient
+	readIdx           atomic.Uint64
+
 	// ---- http client for health probes ----
 	httpClient *http.Client
 
@@ -79,10 +86,11 @@ type Client struct {
 type ClientOption func(*clientOpts)
 
 type clientOpts struct {
-	retryCount    int
-	checkInterval time.Duration
-	dialOpts      []grpc.DialOption
-	httpClient    *http.Client
+	retryCount        int
+	checkInterval     time.Duration
+	dialOpts          []grpc.DialOption
+	httpClient        *http.Client
+	readFromFollowers bool
 }
 
 func defaultOpts() *clientOpts {
@@ -106,6 +114,13 @@ func WithRetryCount(n int) ClientOption {
 // for the current leader.
 func WithCheckInterval(d time.Duration) ClientOption {
 	return func(o *clientOpts) { o.checkInterval = d }
+}
+
+// WithReadFromFollowers distributes read requests (Get/Search) across all
+// cluster nodes round-robin. Requires the servers to run with
+// read_policy=follower; writes still go to the leader.
+func WithReadFromFollowers() ClientOption {
+	return func(o *clientOpts) { o.readFromFollowers = true }
 }
 
 // WithGRPCDialOptions sets custom gRPC dial options (e.g. TLS).
@@ -173,13 +188,14 @@ func NewCluster(ctx context.Context, nodes []NodeSpec, opts ...ClientOption) (*C
 	}
 
 	c := &Client{
-		nodes:         append([]NodeSpec(nil), nodes...),
-		nodeMap:       make(map[string]int),
-		retryCount:    o.retryCount,
-		checkInterval: o.checkInterval,
-		dialOpts:      o.dialOpts,
-		httpClient:    o.httpClient,
-		stopCh:        make(chan struct{}),
+		nodes:             append([]NodeSpec(nil), nodes...),
+		nodeMap:           make(map[string]int),
+		retryCount:        o.retryCount,
+		checkInterval:     o.checkInterval,
+		dialOpts:          o.dialOpts,
+		httpClient:        o.httpClient,
+		readFromFollowers: o.readFromFollowers,
+		stopCh:            make(chan struct{}),
 	}
 	for i := range c.nodes {
 		if c.nodes[i].ID != "" {
@@ -189,6 +205,28 @@ func NewCluster(ctx context.Context, nodes []NodeSpec, opts ...ClientOption) (*C
 	// Initial leader discovery: try nodes in order.
 	if err := c.discoverLeader(ctx); err != nil {
 		return nil, err
+	}
+
+	// Build the round-robin read pool. Connections dial lazily; readCall
+	// falls back to other nodes when one is unreachable.
+	if c.readFromFollowers {
+		c.readConns = make([]*grpc.ClientConn, len(c.nodes))
+		c.readClients = make([]pb.CacheServiceClient, len(c.nodes))
+		for i, node := range c.nodes {
+			if node.GRPCAddr == "" {
+				continue
+			}
+			target := node.GRPCAddr
+			if !strings.Contains(target, "://") {
+				target = "passthrough:///" + target
+			}
+			conn, err := grpc.NewClient(target, c.dialOpts...)
+			if err != nil {
+				return nil, fmt.Errorf("dial read pool node %s: %w", node.GRPCAddr, err)
+			}
+			c.readConns[i] = conn
+			c.readClients[i] = pb.NewCacheServiceClient(conn)
+		}
 	}
 
 	// Start background health checker.
@@ -218,6 +256,12 @@ func (c *Client) Close() error {
 		_ = c.conn.Close()
 	}
 	c.mu.Unlock()
+
+	for _, conn := range c.readConns {
+		if conn != nil {
+			_ = conn.Close()
+		}
+	}
 	return nil
 }
 
@@ -509,6 +553,59 @@ func (c *Client) retryableCall(ctx context.Context, fn func(pb.CacheServiceClien
 	return lastErr
 }
 
+// isRetryableReadErr reports whether a read error from one pool node is worth
+// retrying on another node: network failures, or the node could not confirm a
+// read index (e.g. it cannot reach the leader).
+func isRetryableReadErr(err error) bool {
+	st, ok := status.FromError(err)
+	if !ok {
+		return true
+	}
+	switch st.Code() {
+	case codes.Unavailable, codes.DeadlineExceeded:
+		return true
+	case codes.FailedPrecondition:
+		msg := st.Message()
+		return strings.Contains(msg, "not leader") ||
+			strings.Contains(msg, "read index") ||
+			strings.Contains(msg, "wait apply") ||
+			strings.Contains(msg, "no gRPC address for leader")
+	}
+	return false
+}
+
+// readCall round-robins the read request over all pool nodes, retrying on
+// another node when one is unreachable or cannot serve the read.
+func (c *Client) readCall(ctx context.Context, fn func(pb.CacheServiceClient) error) error {
+	n := len(c.readClients)
+	if n == 0 {
+		return ErrNoClient
+	}
+	start := int(c.readIdx.Add(1)-1) % n
+	var lastErr error
+	for i := 0; i < n; i++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		cli := c.readClients[(start+i)%n]
+		if cli == nil {
+			continue
+		}
+		err := fn(cli)
+		if err == nil {
+			return nil
+		}
+		if !isRetryableReadErr(err) {
+			return err
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return ErrNoClient
+}
+
 // ---------------------------------------------------------------------------
 // Public API methods
 // ---------------------------------------------------------------------------
@@ -517,7 +614,7 @@ func (c *Client) retryableCall(ctx context.Context, fn func(pb.CacheServiceClien
 func (c *Client) Get(ctx context.Context, key string) (any, bool, error) {
 	var val any
 	var found bool
-	err := c.retryableCall(ctx, func(cli pb.CacheServiceClient) error {
+	call := func(cli pb.CacheServiceClient) error {
 		resp, rpcErr := cli.Get(ctx, &pb.GetRequest{Key: key})
 		if rpcErr != nil {
 			return rpcErr
@@ -529,7 +626,13 @@ func (c *Client) Get(ctx context.Context, key string) (any, bool, error) {
 		val = v
 		found = resp.Found
 		return nil
-	})
+	}
+	var err error
+	if c.readFromFollowers {
+		err = c.readCall(ctx, call)
+	} else {
+		err = c.retryableCall(ctx, call)
+	}
 	return val, found, err
 }
 
@@ -573,7 +676,7 @@ func (c *Client) Search(ctx context.Context, pattern string, isRegex bool) ([]st
 	}
 
 	var keys []string
-	err := c.retryableCall(ctx, func(cli pb.CacheServiceClient) error {
+	call := func(cli pb.CacheServiceClient) error {
 		resp, rpcErr := cli.Search(ctx, &pb.SearchRequest{
 			Pattern: pattern,
 			Mode:    mode,
@@ -583,8 +686,11 @@ func (c *Client) Search(ctx context.Context, pattern string, isRegex bool) ([]st
 		}
 		keys = resp.Keys
 		return nil
-	})
-	return keys, err
+	}
+	if c.readFromFollowers {
+		return keys, c.readCall(ctx, call)
+	}
+	return keys, c.retryableCall(ctx, call)
 }
 
 // ExpireKey sets/removes expiration on an existing key.

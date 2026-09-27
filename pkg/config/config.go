@@ -39,6 +39,7 @@ type Config struct {
 	MaxValueSize      int               `yaml:"max_value_size"`  // max value size in bytes (0 = unlimited)
 	MaxQPS            int               `yaml:"max_qps"`         // max requests/sec per client (0 = unlimited)
 	EvictionPolicy    string            `yaml:"eviction_policy"` // "none" or "lru" (default "none")
+	ReadPolicy        string            `yaml:"read_policy"`     // "leader" (default) or "follower"
 }
 
 func Default() *Config {
@@ -126,6 +127,9 @@ func (c *Config) OverrideFromEnv() {
 	if v := os.Getenv("SIMPLE_CACHE_EVICTION_POLICY"); v != "" {
 		c.EvictionPolicy = v
 	}
+	if v := os.Getenv("SIMPLE_CACHE_READ_POLICY"); v != "" {
+		c.ReadPolicy = v
+	}
 }
 
 func (c *Config) Validate() error {
@@ -183,6 +187,11 @@ func (c *Config) Validate() error {
 	case "none", "lru", "":
 	default:
 		return fmt.Errorf("invalid eviction_policy: %q (expected 'none' or 'lru')", c.EvictionPolicy)
+	}
+	switch c.ReadPolicy {
+	case "leader", "follower", "":
+	default:
+		return fmt.Errorf("invalid read_policy: %q (expected 'leader' or 'follower')", c.ReadPolicy)
 	}
 	return nil
 }
