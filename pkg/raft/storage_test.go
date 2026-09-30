@@ -2,6 +2,7 @@ package raft
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -125,4 +126,46 @@ func TestStorageCompactLog(t *testing.T) {
 	require.Len(t, entries, 2)
 	require.Equal(t, uint64(3), entries[0].Index)
 	require.Equal(t, uint64(4), entries[1].Index)
+}
+
+// TestSnapshotV2RoundTrip verifies the raw-data snapshot layout survives a
+// save/load cycle byte-for-byte.
+func TestSnapshotV2RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStorage(filepath.Join(dir, "raft.wal"))
+	meta := SnapshotMeta{LastIncludedIndex: 7, LastIncludedTerm: 3}
+	data := make([]byte, 0, 4096)
+	for i := 0; i < 4096; i++ {
+		data = append(data, byte(i%251))
+	}
+	require.NoError(t, st.SaveSnapshot(meta, data))
+
+	raw, err := os.ReadFile(filepath.Join(dir, "raft.wal.snapshot"))
+	require.NoError(t, err)
+	require.True(t, bytes.HasPrefix(raw, snapshotMagic), "file must use the v2 layout")
+	require.NotContains(t, string(raw), `"data"`, "data must be raw bytes, not base64 JSON")
+
+	gotMeta, gotData, err := st.LoadSnapshot()
+	require.NoError(t, err)
+	require.Equal(t, meta, *gotMeta)
+	require.Equal(t, data, gotData)
+}
+
+// TestSnapshotV1BackwardCompat verifies a legacy JSON snapshot (base64 data)
+// still loads.
+func TestSnapshotV1BackwardCompat(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStorage(filepath.Join(dir, "raft.wal"))
+	legacy, err := json.Marshal(snapshotFile{
+		Meta: SnapshotMeta{LastIncludedIndex: 5, LastIncludedTerm: 2},
+		Data: []byte("legacy-data"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "raft.wal.snapshot"), legacy, 0o644))
+
+	meta, data, err := st.LoadSnapshot()
+	require.NoError(t, err)
+	require.Equal(t, uint64(5), meta.LastIncludedIndex)
+	require.Equal(t, uint64(2), meta.LastIncludedTerm)
+	require.Equal(t, []byte("legacy-data"), data)
 }

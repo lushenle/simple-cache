@@ -953,11 +953,18 @@ func TestWaitApplied(t *testing.T) {
 	defer n3.Close()
 
 	leader := waitForLeader(t, n1, n2, n3)
-	submitStable(t, leader, &command.SetCommand{Key: "k-wait", Value: "v"})
+	submitToCluster(t, []*Node{n1, n2, n3}, &command.SetCommand{Key: "k-wait", Value: "v"})
 	waitForCondition(t, func() bool {
 		return applier1.Has("k-wait") && applier2.Has("k-wait") && applier3.Has("k-wait")
 	})
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Re-derive the leader: the submit above may have raced a spurious
+	// election, so the node picked before the write is not necessarily the
+	// leader any more.
+	leader = waitForLeader(t, n1, n2, n3)
 	var follower *Node
 	for _, n := range []*Node{n1, n2, n3} {
 		if n != leader {
@@ -967,8 +974,6 @@ func TestWaitApplied(t *testing.T) {
 	}
 	require.NotNil(t, follower)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	idx, err := leader.ReadIndex(ctx)
 	require.NoError(t, err)
 	require.NoError(t, follower.WaitApplied(ctx, idx))

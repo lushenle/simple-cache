@@ -162,6 +162,22 @@ var (
 		},
 	)
 
+	RaftPeerRTT = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "raft_peer_rtt_seconds",
+			Help:    "Round-trip time of AppendEntries calls to individual peers",
+			Buckets: prometheus.ExponentialBuckets(1e-4, 2, 15),
+		},
+	)
+
+	SlowQueries = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cache_slow_queries_total",
+			Help: "Operations exceeding latency thresholds",
+		},
+		[]string{"op", "gt"}, // gt: 0.1 / 0.5 / 1 (seconds)
+	)
+
 	PeersTotal = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "simple_cache_peers_total",
@@ -235,6 +251,8 @@ func Init() {
 			RaftLastApplied,
 			RaftLeaderChanges,
 			RaftAppendEntriesLatency,
+			RaftPeerRTT,
+			SlowQueries,
 			PeersTotal,
 			RaftPendingEntries,
 			RaftSnapshotAge,
@@ -281,6 +299,26 @@ func updateMemoryUsage() {
 func ObserveOperation(duration time.Duration, opType OpType) {
 	OperationDuration.WithLabelValues(string(opType)).Observe(duration.Seconds())
 	RequestDuration.WithLabelValues(string(opType)).Observe(duration.Seconds())
+	observeSlowQueries(duration, opType)
+}
+
+// slowQueryThresholds are the ROADMAP slow-query buckets: >100ms, >500ms, >1s.
+var slowQueryThresholds = []struct {
+	label     string
+	threshold time.Duration
+}{
+	{"0.1", 100 * time.Millisecond},
+	{"0.5", 500 * time.Millisecond},
+	{"1", time.Second},
+}
+
+func observeSlowQueries(duration time.Duration, opType OpType) {
+	op := string(opType)
+	for _, t := range slowQueryThresholds {
+		if duration > t.threshold {
+			SlowQueries.WithLabelValues(op, t.label).Inc()
+		}
+	}
 }
 
 func IncOperation(opType OpType, success bool) {
@@ -314,6 +352,7 @@ func SetRaftCommitIndex(v uint64)                 { RaftCommitIndex.Set(float64(
 func SetRaftLastApplied(v uint64)                 { RaftLastApplied.Set(float64(v)) }
 func IncRaftLeaderChanges()                       { RaftLeaderChanges.Inc() }
 func ObserveAppendEntriesLatency(d time.Duration) { RaftAppendEntriesLatency.Observe(d.Seconds()) }
+func ObservePeerRTT(d time.Duration)             { RaftPeerRTT.Observe(d.Seconds()) }
 func SetPeersTotal(n int)                         { PeersTotal.Set(float64(n)) }
 func SetRaftPendingEntries(n int)                 { RaftPendingEntries.Set(float64(n)) }
 func SetRaftSnapshotAge(seconds float64)          { RaftSnapshotAge.Set(seconds) }

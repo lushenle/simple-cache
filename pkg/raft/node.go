@@ -853,7 +853,9 @@ func (n *Node) replicatePeer(peer string, deadline time.Time) {
 			remaining = time.Second
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), remaining)
+		sendStart := time.Now()
 		resp, err := n.trans.sendAppend(ctx, peer, req)
+		metrics.ObservePeerRTT(time.Since(sendStart))
 		cancel()
 		if err != nil {
 			return

@@ -99,12 +99,12 @@
 
 ## 6. 快速修复项（Quick Wins）
 
-| 项 | 问题 | 方案 |
+| 项 | 状态 | 方案 |
 |---|---|---|
-| 快照文件 base64 膨胀 | `SaveSnapshot` JSON 序列化大 Data 数组，膨胀 ~33% + 编解码开销 | 改为 `[JSON meta 头][原始二进制 data]` 布局，兼容旧格式读取 |
-| 补充 2 个缺失指标 | ROADMAP 2.3 遗留 | `raft_peer_rtt_seconds` 直方图；slow query 计数器（>100ms/500ms/1s 桶） |
-| Dump 持写锁 | 大缓存 Dump 阻塞读写（quality_report 已知风险） | 增量快照或写时复制，Dump 期间不阻塞 Set/Get |
-| 正则搜索 O(n) | 非前缀模式全树遍历（`pkg/cache/search.go:70`） | 已确认前缀模式走 `WalkPrefix` 优化；正则模式文档化限制即可，暂不改 |
+| 快照文件 base64 膨胀 | ✅ 已实现 | 快照 v2 布局 `[magic][version][metaLen][meta JSON][原始 data]`，兼容读取旧 JSON 格式 |
+| 补充 2 个缺失指标 | ✅ 已实现 | `raft_peer_rtt_seconds` 直方图（replicatePeer 实测）；`cache_slow_queries_total` 计数器（gt=0.1/0.5/1s） |
+| Dump 持写锁 | ✅ 已实现 | Dump 改为读锁下浅快照（value 插入后不可变），序列化/排序在锁外进行 |
+| 正则搜索 O(n) | 📝 文档化限制 | 前缀模式走 `WalkPrefix` 优化；正则模式全树遍历为已知限制，暂不改 |
 
 ---
 
@@ -116,10 +116,12 @@
 | P1 | 2. OTel 追踪 | ✅ 已合并 #24 | 1 周 | 低 | 无 |
 | P1 | 3. WAL 二进制编码 | ✅ 早已实现（#14） | - | - | - |
 | P2 | 5. Chaos 测试 | ⬜ 进行中 | 1 周 | 低 | 建议先于 4（先有测试再改锁） |
-| P2 | 4. Raft 锁拆分 | ⬜ | 3-5 天 | 中（锁顺序） | 建议在 Chaos 测试后 |
-| P3 | 6. Quick Wins | ⬜ | 2-3 天 | 低 | 无 |
+| P2 | 4. Raft 锁拆分 | ✅ 已合并 #27 | 3-5 天 | 中（锁顺序） | 建议在 Chaos 测试后 |
+| P3 | 6. Quick Wins | ✅ 已实现 | 2-3 天 | 低 | 无 |
 
 建议顺序：**1 → 2 → 5 → 4 → 6**。Chaos 测试先于锁拆分，为并发重构提供安全网。
+
+**全部完成。**
 
 ## 本分支同步的文档更新
 

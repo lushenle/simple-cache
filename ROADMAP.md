@@ -20,9 +20,7 @@ The project is a production-hardened Raft-based distributed cache with:
 - Structured logging (zap + lumberjack)
 
 ### Known Limitations
-- Snapshot file uses JSON/base64 encoding (bloat on large caches)
-- Single mutex serializes all Raft operations
-- No chaos/fault-injection tests
+- Regular-expression search does a full-tree scan (O(n)); prefix search is optimized
 
 > 详细优化方案见 [docs/optimization-plan.md](docs/optimization-plan.md)。
 

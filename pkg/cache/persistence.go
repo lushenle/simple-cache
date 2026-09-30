@@ -231,13 +231,25 @@ func DefaultDumpPath(nodeID, format, dataDir string) string {
 }
 
 func (c *Cache) dumpToBytes(nodeID, format string) ([]byte, []DumpEntry, int, error) {
-	c.mu.Lock(metrics.LockWrite)
-	defer c.mu.Unlock()
+	// Snapshot the item fields under a read lock, then serialize outside the
+	// lock: values are immutable after insert, so a dump of a large cache no
+	// longer blocks Set/Get/Del for the whole serialization duration.
+	type dumpItem struct {
+		key        string
+		value      any
+		expiration time.Time
+	}
+	c.mu.RLock(metrics.LockRead)
+	snapshot := make([]dumpItem, 0, len(c.items))
+	for key, item := range c.items {
+		snapshot = append(snapshot, dumpItem{key: key, value: item.value, expiration: item.expiration})
+	}
+	c.mu.RUnlock()
 
-	entries := make([]DumpEntry, 0, len(c.items))
+	entries := make([]DumpEntry, 0, len(snapshot))
 	now := time.Now()
 	expiredCount := 0
-	for key, item := range c.items {
+	for _, item := range snapshot {
 		if !item.expiration.IsZero() && now.After(item.expiration) {
 			expiredCount++
 			continue
@@ -245,7 +257,7 @@ func (c *Cache) dumpToBytes(nodeID, format string) ([]byte, []DumpEntry, int, er
 
 		val, valType := serializeValue(item.value)
 		entry := DumpEntry{
-			Key:           key,
+			Key:           item.key,
 			Value:         val,
 			ValueType:     valType,
 			HasExpiration: !item.expiration.IsZero(),
