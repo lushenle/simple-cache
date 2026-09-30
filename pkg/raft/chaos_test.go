@@ -110,12 +110,12 @@ func TestPartitionHealRepairsFollower(t *testing.T) {
 	follower.trans.unblockPeer(leader.trans.selfAddr)
 	waitForCondition(t, func() bool { return applyAllHave(appliers, "p1") })
 
-	leader.mu.Lock()
+	leader.logMu.Lock()
 	li, lt := leader.lastLogIndex, leader.lastLogTerm
-	leader.mu.Unlock()
-	follower.mu.Lock()
+	leader.logMu.Unlock()
+	follower.logMu.Lock()
 	fi, ft := follower.lastLogIndex, follower.lastLogTerm
-	follower.mu.Unlock()
+	follower.logMu.Unlock()
 	require.Equal(t, li, fi)
 	require.Equal(t, lt, ft)
 

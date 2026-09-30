@@ -57,11 +57,21 @@ const installSnapshotChunkSize = 4 << 20 // 4 MiB
 var maxPendingSnapshotBytes = 1 << 30 // 1 GiB
 
 type Node struct {
-	mu sync.Mutex
+	// logMu protects the log and derived state: logs, commitIdx, lastApply,
+	// lastLogIndex/Term, snapshotIndex/Term, nextIndex, matchIndex,
+	// replicating, pendingSnapshot.
+	logMu sync.Mutex
+	// metaMu protects term and votedFor (electionDeadline is atomic).
+	// Lock order: applyMu -> logMu -> metaMu -> waiterMu; waiterMu is a leaf
+	// and is never held while acquiring another lock.
+	metaMu       sync.Mutex
+	waiterMu     sync.Mutex
+	term         uint64
+	votedFor     string
+	applyWaiters map[uint64]chan applyResult
 
 	id       string
 	role     atomic.Value
-	term     uint64
 	leaderID atomic.Value
 
 	commitIdx     uint64
@@ -74,14 +84,13 @@ type Node struct {
 	logs        []LogEntry
 	nextIndex   map[string]uint64
 	matchIndex  map[string]uint64
-	applyWaiter map[uint64]chan applyResult
 	// replicating tracks peers with an in-flight replication goroutine so a
 	// heartbeat round never double-sends to the same peer (P2-15). Guarded
-	// by n.mu.
+	// by logMu.
 	replicating map[string]bool
 
 	// pendingSnapshot accumulates InstallSnapshot chunks before the final
-	// restore. Guarded by n.mu.
+	// restore. Guarded by logMu.
 	pendingSnapshot *pendingSnapshot
 
 	storage *Storage
@@ -93,7 +102,6 @@ type Node struct {
 	snapshotEnabled   bool
 	snapshotThreshold uint64
 
-	votedFor         string
 	electionDeadline int64
 	rnd              *rand.Rand
 	rndMu            sync.Mutex
@@ -106,7 +114,7 @@ type Node struct {
 
 	// applyMu serializes FSM access: the apply loop, snapshot capture and
 	// snapshot restore are mutually exclusive so the state machine never
-	// observes interleaved operations. Lock order: applyMu -> n.mu -> storage.
+	// observes interleaved operations. Lock order: applyMu -> logMu -> metaMu.
 	applyMu sync.Mutex
 	// applyErr stores a fatal state-machine apply error (nil when healthy).
 	applyErr atomic.Pointer[raftApplyError]
@@ -127,7 +135,7 @@ func NewNode(id string, addr string, peers []string, storage *Storage, applier A
 		stopCh:            make(chan struct{}),
 		nextIndex:         make(map[string]uint64),
 		matchIndex:        make(map[string]uint64),
-		applyWaiter:       make(map[uint64]chan applyResult),
+		applyWaiters:     make(map[uint64]chan applyResult),
 		replicating:       make(map[string]bool),
 	}
 	n.role.Store(Follower)
@@ -190,9 +198,9 @@ func NewNode(id string, addr string, peers []string, storage *Storage, applier A
 	seed := time.Now().UnixNano() ^ int64(len(peers))
 	n.rnd = rand.New(rand.NewSource(seed))
 	n.resetElectionDeadline()
-	n.mu.Lock()
+	n.logMu.Lock()
 	n.resetLeaderProgressLocked()
-	n.mu.Unlock()
+	n.logMu.Unlock()
 	_ = n.applyCommittedEntries()
 	n.maybeSnapshot()
 
@@ -219,8 +227,10 @@ func (n *Node) LeaderID() string {
 }
 
 func (n *Node) Status() map[string]any {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.logMu.Lock()
+	n.metaMu.Lock()
+	defer n.metaMu.Unlock()
+	defer n.logMu.Unlock()
 	return map[string]any{
 		"node_id":        n.id,
 		"role":           n.Role(),
@@ -245,9 +255,11 @@ func (n *Node) loop() {
 			return
 		case <-ticker.C:
 			if n.metaDirty.Load() {
-				n.mu.Lock()
+				n.logMu.Lock()
+				n.metaMu.Lock()
 				n.flushMeta()
-				n.mu.Unlock()
+				n.metaMu.Unlock()
+				n.logMu.Unlock()
 			}
 			if n.Role() == Leader {
 				start := time.Now()
@@ -272,9 +284,9 @@ func (n *Node) electionLoop() {
 			}
 			if time.Now().UnixNano() > atomic.LoadInt64(&n.electionDeadline) {
 				if n.logger != nil {
-					n.mu.Lock()
+					n.metaMu.Lock()
 					term := n.term
-					n.mu.Unlock()
+					n.metaMu.Unlock()
 					n.logger.Info("election timeout", zap.String("node", n.id), zap.Uint64("term", term))
 				}
 				n.startElection()
@@ -308,11 +320,13 @@ func (n *Node) startElection() {
 	// Phase 1: pre-vote (P2-12). Ask the majority whether they would grant a
 	// vote at term+1 without touching term/votedFor, so a partitioned node
 	// stops inflating its term while a healthy leader exists.
-	n.mu.Lock()
+	n.logMu.Lock()
+	n.metaMu.Lock()
 	nextTerm := n.term + 1
 	lastLogIndex := n.lastLogIndex
 	lastLogTerm := n.lastLogTerm
-	n.mu.Unlock()
+	n.metaMu.Unlock()
+	n.logMu.Unlock()
 
 	preReq := RequestVoteReq{
 		Term:         nextTerm,
@@ -330,14 +344,16 @@ func (n *Node) startElection() {
 	}
 
 	// Phase 2: real election.
-	n.mu.Lock()
+	n.logMu.Lock()
+	n.metaMu.Lock()
 	n.term++
 	n.votedFor = n.id
 	term := n.term
 	lastLogIndex = n.lastLogIndex
 	lastLogTerm = n.lastLogTerm
 	n.flushMeta()
-	n.mu.Unlock()
+	n.metaMu.Unlock()
+	n.logMu.Unlock()
 
 	req := RequestVoteReq{
 		Term:         term,
@@ -355,7 +371,8 @@ func (n *Node) startElection() {
 	}
 
 	if votes >= (total/2 + 1) {
-		n.mu.Lock()
+		n.logMu.Lock()
+		n.metaMu.Lock()
 		if n.term == term {
 			n.role.Store(Leader)
 			metrics.SetRaftRole(n.id, string(Leader))
@@ -381,7 +398,8 @@ func (n *Node) startElection() {
 				n.logger.Info("become leader", zap.String("node", n.id), zap.Uint64("term", n.term))
 			}
 		}
-		n.mu.Unlock()
+		n.metaMu.Unlock()
+		n.logMu.Unlock()
 		// Send an immediate fast heartbeat (100ms deadline) to suppress
 		// follower elections before doing full log replication.
 		n.fastHeartbeat()
@@ -405,18 +423,22 @@ func (n *Node) Submit(ctx context.Context, cmd interface{}) (interface{}, error)
 
 	waiter := make(chan applyResult, 1)
 
-	n.mu.Lock()
+	n.logMu.Lock()
 	if n.Role() != Leader {
-		n.mu.Unlock()
+		n.logMu.Unlock()
 		return nil, ErrNotLeader{Leader: n.leaderID.Load().(string)}
 	}
 	entry.Index = n.lastLogIndex + 1
+	n.metaMu.Lock()
 	entry.Term = n.term
 	if err := n.appendEntryLocked(entry); err != nil {
-		n.mu.Unlock()
+		n.metaMu.Unlock()
+		n.logMu.Unlock()
 		return nil, err
 	}
-	n.applyWaiter[entry.Index] = waiter
+	n.waiterMu.Lock()
+	n.applyWaiters[entry.Index] = waiter
+	n.waiterMu.Unlock()
 	n.matchIndex[n.id] = entry.Index
 	n.nextIndex[n.id] = entry.Index + 1
 	if n.majorityLocked() == 1 {
@@ -425,7 +447,8 @@ func (n *Node) Submit(ctx context.Context, cmd interface{}) (interface{}, error)
 		n.flushMeta()
 	}
 	isSingle := n.majorityLocked() == 1
-	n.mu.Unlock()
+	n.metaMu.Unlock()
+	n.logMu.Unlock()
 
 	if isSingle {
 		if err := n.applyCommittedEntries(); err != nil {
@@ -435,9 +458,9 @@ func (n *Node) Submit(ctx context.Context, cmd interface{}) (interface{}, error)
 	}
 
 	if err := n.replicateUntilCommitted(entry.Index); err != nil {
-		n.mu.Lock()
-		delete(n.applyWaiter, entry.Index)
-		n.mu.Unlock()
+		n.waiterMu.Lock()
+		delete(n.applyWaiters, entry.Index)
+		n.waiterMu.Unlock()
 		return nil, err
 	}
 
@@ -447,6 +470,12 @@ func (n *Node) Submit(ctx context.Context, cmd interface{}) (interface{}, error)
 		timer.Stop()
 		return result.resp, result.err
 	case <-timer.C:
+		// The entry may have been applied right as the timer fired; remove
+		// the waiter so a later step-down drain never blocks sending to a
+		// channel that will not be consumed.
+		n.waiterMu.Lock()
+		delete(n.applyWaiters, entry.Index)
+		n.waiterMu.Unlock()
 		return nil, ErrCommit{}
 	}
 }
@@ -461,8 +490,8 @@ func (n *Node) SubmitPeerChange(addr string, remove bool) error {
 	}
 
 	entryIndex, isSingle, err := func() (uint64, bool, error) {
-		n.mu.Lock()
-		defer n.mu.Unlock()
+		n.logMu.Lock()
+		defer n.logMu.Unlock()
 		// Single-member-change model: reject a new change while an earlier
 		// peer-change entry is still uncommitted (P1-8).
 		if n.peerChangeInFlightLocked() {
@@ -486,6 +515,8 @@ func (n *Node) SubmitPeerChange(addr string, remove bool) error {
 		if remove {
 			entryType = EntryTypeRemovePeer
 		}
+		n.metaMu.Lock()
+		defer n.metaMu.Unlock()
 		entry := LogEntry{
 			Index: n.lastLogIndex + 1,
 			Term:  n.term,
@@ -536,8 +567,10 @@ func (n *Node) peerChangeInFlightLocked() bool {
 // snapshot) is performed outside the lock.
 func (n *Node) onAppendEntries(req AppendEntriesReq) AppendEntriesResp {
 	resp, applyNeeded := func() (AppendEntriesResp, bool) {
-		n.mu.Lock()
-		defer n.mu.Unlock()
+		n.logMu.Lock()
+		n.metaMu.Lock()
+		defer n.metaMu.Unlock()
+		defer n.logMu.Unlock()
 		return n.appendEntriesLocked(req)
 	}()
 	if applyNeeded {
@@ -653,8 +686,10 @@ func (n *Node) appendEntriesLocked(req AppendEntriesReq) (AppendEntriesResp, boo
 }
 
 func (n *Node) onRequestVote(req RequestVoteReq) RequestVoteResp {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.logMu.Lock()
+	n.metaMu.Lock()
+	defer n.metaMu.Unlock()
+	defer n.logMu.Unlock()
 
 	if req.PreVote {
 		// Pre-vote (P2-12): check term and log freshness without mutating
@@ -702,9 +737,9 @@ func (n *Node) replicateUntilCommitted(index uint64) error {
 
 		n.replicateAllWithDeadline(deadline)
 
-		n.mu.Lock()
+		n.logMu.Lock()
 		committed := n.commitIdx >= index
-		n.mu.Unlock()
+		n.logMu.Unlock()
 		if committed {
 			return nil
 		}
@@ -742,22 +777,22 @@ func (n *Node) replicateAllWithDeadline(deadline time.Time) {
 		if time.Now().After(deadline) {
 			break
 		}
-		n.mu.Lock()
+		n.logMu.Lock()
 		if n.replicating[peer] {
-			n.mu.Unlock()
+			n.logMu.Unlock()
 			continue
 		}
 		n.replicating[peer] = true
-		n.mu.Unlock()
+		n.logMu.Unlock()
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(target string) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			defer func() {
-				n.mu.Lock()
+				n.logMu.Lock()
 				delete(n.replicating, target)
-				n.mu.Unlock()
+				n.logMu.Unlock()
 			}()
 			n.replicatePeer(target, deadline)
 		}(peer)
@@ -774,9 +809,9 @@ func (n *Node) replicatePeer(peer string, deadline time.Time) {
 		if time.Now().After(deadline) {
 			return
 		}
-		n.mu.Lock()
+		n.logMu.Lock()
 		if n.Role() != Leader {
-			n.mu.Unlock()
+			n.logMu.Unlock()
 			return
 		}
 		next := n.nextIndex[peer]
@@ -785,10 +820,11 @@ func (n *Node) replicatePeer(peer string, deadline time.Time) {
 			n.nextIndex[peer] = next
 		}
 		if next <= n.snapshotIndex {
-			n.mu.Unlock()
+			n.logMu.Unlock()
 			n.installSnapshotToPeer(peer, deadline)
 			return
 		}
+		n.metaMu.Lock()
 		prevIndex := next - 1
 		req := AppendEntriesReq{
 			Term:         n.term,
@@ -800,12 +836,14 @@ func (n *Node) replicatePeer(peer string, deadline time.Time) {
 		if next <= n.lastLogIndex {
 			offset, ok := n.offsetOfLocked(next)
 			if !ok {
-				n.mu.Unlock()
+				n.metaMu.Unlock()
+				n.logMu.Unlock()
 				return
 			}
 			req.Entries = append([]LogEntry(nil), n.logs[offset:]...)
 		}
-		n.mu.Unlock()
+		n.metaMu.Unlock()
+		n.logMu.Unlock()
 
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
@@ -822,15 +860,18 @@ func (n *Node) replicatePeer(peer string, deadline time.Time) {
 		}
 
 		applyNeeded := false
-		n.mu.Lock()
+		n.logMu.Lock()
+		n.metaMu.Lock()
 		if resp.Term > n.term {
 			n.stepDownLocked(resp.Term)
 			n.flushMeta()
-			n.mu.Unlock()
+			n.metaMu.Unlock()
+			n.logMu.Unlock()
 			return
 		}
 		if n.Role() != Leader || req.Term != n.term {
-			n.mu.Unlock()
+			n.metaMu.Unlock()
+			n.logMu.Unlock()
 			return
 		}
 
@@ -843,7 +884,8 @@ func (n *Node) replicatePeer(peer string, deadline time.Time) {
 			n.nextIndex[peer] = match + 1
 			applyNeeded = n.advanceCommitLocked()
 			more := n.nextIndex[peer] <= n.lastLogIndex
-			n.mu.Unlock()
+			n.metaMu.Unlock()
+			n.logMu.Unlock()
 
 			if applyNeeded {
 				_ = n.applyCommittedEntries()
@@ -867,7 +909,8 @@ func (n *Node) replicatePeer(peer string, deadline time.Time) {
 		} else if n.nextIndex[peer] > 1 {
 			n.nextIndex[peer]--
 		}
-		n.mu.Unlock()
+		n.metaMu.Unlock()
+		n.logMu.Unlock()
 		if !jumped {
 			return
 		}
@@ -879,11 +922,11 @@ func (n *Node) maybeSnapshot() {
 		return
 	}
 
-	n.mu.Lock()
+	n.logMu.Lock()
 	shouldSnapshot := n.snapshotThreshold > 0 && n.lastApply > n.snapshotIndex && (n.lastApply-n.snapshotIndex) >= n.snapshotThreshold
 	snapshotIndex := n.lastApply
 	snapshotTerm := n.termAtLocked(snapshotIndex)
-	n.mu.Unlock()
+	n.logMu.Unlock()
 	if !shouldSnapshot {
 		return
 	}
@@ -911,9 +954,11 @@ func (n *Node) createSnapshot(index, term uint64) error {
 		return err
 	}
 
-	n.mu.Lock()
+	n.logMu.Lock()
+	n.metaMu.Lock()
 	if index <= n.snapshotIndex {
-		n.mu.Unlock()
+		n.metaMu.Unlock()
+		n.logMu.Unlock()
 		return nil
 	}
 	n.snapshotIndex = index
@@ -934,7 +979,8 @@ func (n *Node) createSnapshot(index, term uint64) error {
 	n.logs = remaining
 	n.recomputeLastLogLocked()
 	n.flushMeta()
-	n.mu.Unlock()
+	n.metaMu.Unlock()
+	n.logMu.Unlock()
 
 	return n.storage.CompactLog(index)
 }
@@ -944,10 +990,10 @@ func (n *Node) installSnapshotToPeer(peer string, deadline time.Time) {
 	if err != nil || meta == nil {
 		return
 	}
-	n.mu.Lock()
+	n.metaMu.Lock()
 	term := n.term
 	leaderID := n.id
-	n.mu.Unlock()
+	n.metaMu.Unlock()
 
 	// Stream the snapshot in bounded chunks (P2-14). Each chunk has its own
 	// timeout; if any chunk fails the follower keeps its partial state and
@@ -979,10 +1025,12 @@ func (n *Node) installSnapshotToPeer(peer string, deadline time.Time) {
 			return
 		}
 		if resp.Term > term {
-			n.mu.Lock()
+			n.logMu.Lock()
+			n.metaMu.Lock()
 			n.stepDownLocked(resp.Term)
 			n.flushMeta()
-			n.mu.Unlock()
+			n.metaMu.Unlock()
+			n.logMu.Unlock()
 			return
 		}
 		if !resp.Success {
@@ -990,8 +1038,10 @@ func (n *Node) installSnapshotToPeer(peer string, deadline time.Time) {
 		}
 	}
 
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.logMu.Lock()
+	n.metaMu.Lock()
+	defer n.metaMu.Unlock()
+	defer n.logMu.Unlock()
 	if n.Role() == Leader && n.term == term {
 		n.matchIndex[peer] = meta.LastIncludedIndex
 		n.nextIndex[peer] = meta.LastIncludedIndex + 1
@@ -1007,8 +1057,10 @@ func (n *Node) onInstallSnapshot(req InstallSnapshotReq) InstallSnapshotResp {
 	// Phase 1: term/leader/role bookkeeping + chunk accumulation.
 	var snap *pendingSnapshot
 	resp, proceed := func() (InstallSnapshotResp, bool) {
-		n.mu.Lock()
-		defer n.mu.Unlock()
+		n.logMu.Lock()
+		n.metaMu.Lock()
+		defer n.metaMu.Unlock()
+		defer n.logMu.Unlock()
 		if req.Term < n.term {
 			return InstallSnapshotResp{Term: n.term, Success: false}, false
 		}
@@ -1058,9 +1110,9 @@ func (n *Node) onInstallSnapshot(req InstallSnapshotReq) InstallSnapshotResp {
 	if !ok {
 		return InstallSnapshotResp{Term: req.Term, Success: false}
 	}
-	n.mu.Lock()
+	n.logMu.Lock()
 	stale := snap.lastIncludedIndex < n.lastApply
-	n.mu.Unlock()
+	n.logMu.Unlock()
 	if stale {
 		// Defensive: a snapshot behind the already-applied point would wipe
 		// newer state; reject it and let the leader retry with its latest.
@@ -1078,8 +1130,9 @@ func (n *Node) onInstallSnapshot(req InstallSnapshotReq) InstallSnapshotResp {
 		return InstallSnapshotResp{Term: req.Term, Success: false}
 	}
 
-	// Phase 3: update state under n.mu.
-	n.mu.Lock()
+	// Phase 3: update state under logMu + metaMu.
+	n.logMu.Lock()
+	n.metaMu.Lock()
 	n.snapshotIndex = snap.lastIncludedIndex
 	n.snapshotTerm = snap.lastIncludedTerm
 	filtered := make([]LogEntry, 0, len(n.logs))
@@ -1097,7 +1150,8 @@ func (n *Node) onInstallSnapshot(req InstallSnapshotReq) InstallSnapshotResp {
 	}
 	n.recomputeLastLogLocked()
 	n.flushMeta()
-	n.mu.Unlock()
+	n.metaMu.Unlock()
+	n.logMu.Unlock()
 
 	_ = n.storage.CompactLog(snap.lastIncludedIndex)
 	return InstallSnapshotResp{Term: req.Term, Success: true}
@@ -1106,7 +1160,7 @@ func (n *Node) onInstallSnapshot(req InstallSnapshotReq) InstallSnapshotResp {
 // advanceCommitLocked advances commitIdx to the highest index replicated by
 // a majority and belonging to the current term (Raft §5.4.2). It derives the
 // candidate from the majority-th largest match index instead of scanning the
-// whole log on every heartbeat (P2-15).
+// whole log on every heartbeat (P2-15). Callers must hold logMu and metaMu.
 func (n *Node) advanceCommitLocked() bool {
 	peers := n.trans.Peers()
 	majority := len(peers)/2 + 1
@@ -1145,40 +1199,45 @@ func (n *Node) applyCommittedEntries() error {
 	n.applyMu.Lock()
 	defer n.applyMu.Unlock()
 	for {
-		n.mu.Lock()
+		n.logMu.Lock()
 		if n.applyFailed() {
-			n.mu.Unlock()
+			n.logMu.Unlock()
 			return errors.New("state machine apply failed")
 		}
 		if n.lastApply >= n.commitIdx {
-			n.mu.Unlock()
+			n.logMu.Unlock()
 			return nil
 		}
 		nextIndex := n.lastApply + 1
 		if nextIndex <= n.snapshotIndex {
 			n.lastApply = n.snapshotIndex
-			n.mu.Unlock()
+			n.logMu.Unlock()
 			continue
 		}
 		entry, ok := n.entryAtLocked(nextIndex)
 		if !ok {
-			n.mu.Unlock()
+			n.logMu.Unlock()
 			return n.failApply(errors.New("missing committed log entry"))
 		}
-		waiter := n.applyWaiter[entry.Index]
+		n.waiterMu.Lock()
+		waiter := n.applyWaiters[entry.Index]
 		if waiter != nil {
-			delete(n.applyWaiter, entry.Index)
+			delete(n.applyWaiters, entry.Index)
 		}
-		n.mu.Unlock()
+		n.waiterMu.Unlock()
+		n.logMu.Unlock()
 
 		resp, err := n.applyEntry(entry)
 
-		n.mu.Lock()
+		n.logMu.Lock()
 		if err != nil {
-			n.mu.Unlock()
+			n.logMu.Unlock()
 			n.failApply(err)
 			if waiter != nil {
-				waiter <- applyResult{resp: resp, err: err}
+				select {
+				case waiter <- applyResult{resp: resp, err: err}:
+				default:
+				}
 				close(waiter)
 			}
 			return err
@@ -1188,10 +1247,13 @@ func (n *Node) applyCommittedEntries() error {
 		if n.commitIdx >= n.lastApply {
 			metrics.SetRaftPendingEntries(int(n.commitIdx - n.lastApply))
 		}
-		n.mu.Unlock()
+		n.logMu.Unlock()
 
 		if waiter != nil {
-			waiter <- applyResult{resp: resp, err: err}
+			select {
+			case waiter <- applyResult{resp: resp, err: err}:
+			default:
+			}
 			close(waiter)
 		}
 	}
@@ -1235,7 +1297,8 @@ func (n *Node) applyPeerChange(entry LogEntry, remove bool) error {
 		metrics.SetPeersTotal(len(n.trans.Peers()))
 	}
 
-	n.mu.Lock()
+	n.logMu.Lock()
+	n.metaMu.Lock()
 	if remove {
 		delete(n.nextIndex, change.Addr)
 		delete(n.matchIndex, change.Addr)
@@ -1243,7 +1306,8 @@ func (n *Node) applyPeerChange(entry LogEntry, remove bool) error {
 		n.nextIndex[change.Addr] = n.lastLogIndex + 1
 	}
 	n.flushMeta()
-	n.mu.Unlock()
+	n.metaMu.Unlock()
+	n.logMu.Unlock()
 	return nil
 }
 
@@ -1339,11 +1403,19 @@ func (n *Node) stepDownLocked(term uint64) {
 	n.role.Store(Follower)
 	n.leaderID.Store("")
 	metrics.SetRaftRole(n.id, string(Follower))
-	// Notify and clean up any pending command waiters so they don't leak
-	for idx, w := range n.applyWaiter {
-		w <- applyResult{resp: nil, err: ErrNotLeader{Leader: ""}}
+	// Notify and clean up any pending command waiters so they don't leak.
+	// The send is non-blocking: a waiter whose Submit already timed out
+	// leaves a full channel, and blocking here while holding logMu/metaMu
+	// would deadlock the whole node.
+	n.waiterMu.Lock()
+	defer n.waiterMu.Unlock()
+	for idx, w := range n.applyWaiters {
+		select {
+		case w <- applyResult{resp: nil, err: ErrNotLeader{Leader: ""}}:
+		default:
+		}
 		close(w)
-		delete(n.applyWaiter, idx)
+		delete(n.applyWaiters, idx)
 		// Use the locked (no-jitter) deadline reset so this node waits the
 		// full election timeout before starting a new election.  This gives
 		// the new leader at least election_ms to send heartbeats and stabilise
@@ -1361,9 +1433,9 @@ func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
 		return 0, ErrNotLeader{Leader: n.leaderID.Load().(string)}
 	}
 	// Record the current commit index.
-	n.mu.Lock()
+	n.logMu.Lock()
 	idx := n.commitIdx
-	n.mu.Unlock()
+	n.logMu.Unlock()
 	// Perform a quorum heartbeat to confirm leadership.
 	if err := n.heartbeatRound(ctx); err != nil {
 		return 0, err
@@ -1376,10 +1448,10 @@ func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
 	// miss committed-but-not-yet-applied entries (linearizability).
 	deadline := time.Now().Add(time.Second)
 	for {
-		n.mu.Lock()
+		n.logMu.Lock()
 		applied := n.lastApply
 		isLeader := n.Role() == Leader
-		n.mu.Unlock()
+		n.logMu.Unlock()
 		if !isLeader {
 			return 0, ErrNotLeader{Leader: n.LeaderID()}
 		}
@@ -1402,9 +1474,9 @@ func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
 // obtained from the leader is reflected in the local state machine.
 func (n *Node) WaitApplied(ctx context.Context, idx uint64) error {
 	for {
-		n.mu.Lock()
+		n.logMu.Lock()
 		applied := n.lastApply
-		n.mu.Unlock()
+		n.logMu.Unlock()
 		if n.applyFailed() {
 			return errors.New("state machine apply failed")
 		}
@@ -1441,7 +1513,8 @@ func (n *Node) heartbeatRound(ctx context.Context) error {
 			continue
 		}
 		go func(p string) {
-			n.mu.Lock()
+			n.logMu.Lock()
+			n.metaMu.Lock()
 			req := AppendEntriesReq{
 				Term:         n.term,
 				LeaderID:     n.id,
@@ -1449,7 +1522,8 @@ func (n *Node) heartbeatRound(ctx context.Context) error {
 				PrevLogTerm:  n.lastLogTerm,
 				CommitIdx:    n.commitIdx,
 			}
-			n.mu.Unlock()
+			n.metaMu.Unlock()
+			n.logMu.Unlock()
 			pctx, cancel := context.WithDeadline(ctx, deadline)
 			defer cancel()
 			resp, err := n.trans.sendAppend(pctx, p, req)
@@ -1467,17 +1541,20 @@ func (n *Node) heartbeatRound(ctx context.Context) error {
 			if a.err != nil {
 				continue
 			}
-			n.mu.Lock()
+			n.logMu.Lock()
+			n.metaMu.Lock()
 			if a.term > n.term {
 				n.stepDownLocked(a.term)
 				n.flushMeta()
-				n.mu.Unlock()
+				n.metaMu.Unlock()
+				n.logMu.Unlock()
 				return ErrNotLeader{Leader: ""}
 			}
 			if a.term == n.term {
 				votes++
 			}
-			n.mu.Unlock()
+			n.metaMu.Unlock()
+			n.logMu.Unlock()
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -1495,8 +1572,10 @@ func (n *Node) StepDown() error {
 	if n.Role() != Leader {
 		return ErrNotLeader{Leader: n.leaderID.Load().(string)}
 	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.logMu.Lock()
+	n.metaMu.Lock()
+	defer n.metaMu.Unlock()
+	defer n.logMu.Unlock()
 	if n.Role() != Leader {
 		return ErrNotLeader{Leader: n.leaderID.Load().(string)}
 	}
@@ -1505,11 +1584,16 @@ func (n *Node) StepDown() error {
 	n.role.Store(Follower)
 	n.leaderID.Store("")
 	metrics.SetRaftRole(n.id, string(Follower))
-	for idx, w := range n.applyWaiter {
-		w <- applyResult{resp: nil, err: ErrNotLeader{Leader: ""}}
+	n.waiterMu.Lock()
+	for idx, w := range n.applyWaiters {
+		select {
+		case w <- applyResult{resp: nil, err: ErrNotLeader{Leader: ""}}:
+		default:
+		}
 		close(w)
-		delete(n.applyWaiter, idx)
+		delete(n.applyWaiters, idx)
 	}
+	n.waiterMu.Unlock()
 	n.flushMeta()
 	return nil
 }
@@ -1605,7 +1689,8 @@ func (n *Node) truncateLogFromLocked(index uint64) {
 	n.recomputeLastLogLocked()
 }
 
-// flushMeta synchronously persists the current meta. Callers must hold n.mu.
+// flushMeta synchronously persists the current meta. Callers must hold
+// logMu and metaMu.
 // On failure the dirty flag is left set so the background flusher retries
 // (a lost term/vote would be a safety violation, not just an optimisation).
 func (n *Node) flushMeta() {

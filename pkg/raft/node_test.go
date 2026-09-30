@@ -388,9 +388,9 @@ func TestNodeInstallSnapshotRejectsOversizedAccumulation(t *testing.T) {
 		Data: bytes.Repeat([]byte("y"), 40*1024), Offset: 40 * 1024, Done: false,
 	})
 	require.False(t, resp.Success)
-	node.mu.Lock()
+	node.logMu.Lock()
 	require.Nil(t, node.pendingSnapshot, "oversized accumulation must be dropped")
-	node.mu.Unlock()
+	node.logMu.Unlock()
 }
 
 // TestReplicateRepairsDivergentFollower verifies that pipelined replication
@@ -443,11 +443,11 @@ func TestReplicateRepairsDivergentFollower(t *testing.T) {
 	default:
 		follower = n1
 	}
-	follower.mu.Lock()
+	follower.logMu.Lock()
 	require.NotEmpty(t, follower.logs)
 	follower.logs[len(follower.logs)-1].Term--
 	follower.recomputeLastLogLocked()
-	follower.mu.Unlock()
+	follower.logMu.Unlock()
 
 	// The next write must drive the follower back to consensus.
 	submitStable(t, leader, &command.SetCommand{Key: "k1", Value: "v"})
@@ -455,12 +455,12 @@ func TestReplicateRepairsDivergentFollower(t *testing.T) {
 		return applier1.Has("k1") && applier2.Has("k1") && applier3.Has("k1")
 	})
 
-	leader.mu.Lock()
+	leader.logMu.Lock()
 	wantIndex, wantTerm := leader.lastLogIndex, leader.lastLogTerm
-	leader.mu.Unlock()
-	follower.mu.Lock()
+	leader.logMu.Unlock()
+	follower.logMu.Lock()
 	gotIndex, gotTerm := follower.lastLogIndex, follower.lastLogTerm
-	follower.mu.Unlock()
+	follower.logMu.Unlock()
 	require.Equal(t, wantIndex, gotIndex)
 	require.Equal(t, wantTerm, gotTerm)
 }
@@ -480,9 +480,11 @@ func TestFlushMetaKeepsDirtyOnFailure(t *testing.T) {
 		metaDirty: atomic.Bool{},
 	}
 	n.metaDirty.Store(false)
-	n.mu.Lock()
+	n.logMu.Lock()
+	n.metaMu.Lock()
 	n.flushMeta()
-	n.mu.Unlock()
+	n.metaMu.Unlock()
+	n.logMu.Unlock()
 	require.True(t, n.metaDirty.Load(), "failed flush must keep the dirty flag")
 }
 
@@ -770,12 +772,14 @@ func TestPreVoteDoesNotPersistOrAdvance(t *testing.T) {
 	defer node.Close()
 	waitForLeader(t, node)
 
-	node.mu.Lock()
+	node.logMu.Lock()
+	node.metaMu.Lock()
 	beforeTerm := node.term
 	beforeVotedFor := node.votedFor
 	lastLogIndex := node.lastLogIndex
 	lastLogTerm := node.lastLogTerm
-	node.mu.Unlock()
+	node.metaMu.Unlock()
+	node.logMu.Unlock()
 	metaBefore, err := node.storage.LoadMeta()
 	require.NoError(t, err)
 
@@ -790,10 +794,10 @@ func TestPreVoteDoesNotPersistOrAdvance(t *testing.T) {
 	require.True(t, resp.VoteGranted)
 
 	// ...but must not mutate any state.
-	node.mu.Lock()
+	node.metaMu.Lock()
 	require.Equal(t, beforeTerm, node.term, "pre-vote must not advance term")
 	require.Equal(t, beforeVotedFor, node.votedFor, "pre-vote must not record votedFor")
-	node.mu.Unlock()
+	node.metaMu.Unlock()
 
 	metaAfter, err := node.storage.LoadMeta()
 	require.NoError(t, err)
@@ -820,9 +824,9 @@ func TestSingleNodePeerChangeCommits(t *testing.T) {
 	require.True(t, containsPeer(node.Peers(), ghost))
 
 	// The membership entry must be committed, not just appended.
-	node.mu.Lock()
+	node.logMu.Lock()
 	require.Equal(t, node.lastLogIndex, node.commitIdx)
-	node.mu.Unlock()
+	node.logMu.Unlock()
 }
 
 // TestConcurrentPeerChangeRejected verifies the P1-8 single-member-change
@@ -908,10 +912,10 @@ func TestReadIndexRejectsDeposedLeader(t *testing.T) {
 	default:
 		deposed = n1
 	}
-	deposed.mu.Lock()
+	deposed.metaMu.Lock()
 	deposed.term = leader.term + 1
 	deposed.votedFor = ""
-	deposed.mu.Unlock()
+	deposed.metaMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
