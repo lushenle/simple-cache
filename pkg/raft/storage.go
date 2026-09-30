@@ -35,6 +35,13 @@ type snapshotFile struct {
 	Data []byte       `json:"data"`
 }
 
+// snapshotMagic marks the v2 snapshot layout: [magic 4][version 1][metaLen 4]
+// [meta JSON][raw data]. v1 stored the whole snapshot as one JSON document
+// with the data base64-encoded; LoadSnapshot still reads it.
+var snapshotMagic = []byte{'S', 'N', 'A', 'P'}
+
+const snapshotFormatVersion byte = 1
+
 func (s *Storage) AppendEntry(entry LogEntry) error {
 	return s.AppendEntries([]LogEntry{entry})
 }
@@ -353,16 +360,27 @@ func (s *Storage) SaveSnapshot(meta SnapshotMeta, data []byte) error {
 		return err
 	}
 
-	payload, err := json.Marshal(snapshotFile{
-		Meta: meta,
-		Data: data,
-	})
+	metaJSON, err := json.Marshal(meta)
 	if err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmpPath)
 		return err
 	}
-	if _, err := f.Write(payload); err != nil {
+	header := make([]byte, 4+1+4)
+	copy(header, snapshotMagic)
+	header[4] = snapshotFormatVersion
+	binary.BigEndian.PutUint32(header[5:], uint32(len(metaJSON)))
+	if _, err := f.Write(header); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if _, err := f.Write(metaJSON); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmpPath)
 		return err
@@ -396,18 +414,46 @@ func (s *Storage) LoadSnapshot() (*SnapshotMeta, []byte, error) {
 	}
 	defer f.Close()
 
-	var meta SnapshotMeta
-	var payload snapshotFile
-	dec := json.NewDecoder(f)
-	if err := dec.Decode(&payload); err != nil {
+	raw, err := io.ReadAll(f)
+	if err != nil {
 		return nil, nil, err
 	}
-	meta = payload.Meta
-	data := payload.Data
-	if len(data) == 0 {
+	if len(raw) == 0 {
+		return nil, nil, fmt.Errorf("empty snapshot file")
+	}
+
+	if bytes.HasPrefix(raw, snapshotMagic) {
+		if len(raw) < 9 {
+			return nil, nil, fmt.Errorf("truncated snapshot header")
+		}
+		if raw[4] != snapshotFormatVersion {
+			return nil, nil, fmt.Errorf("unsupported snapshot format version %d", raw[4])
+		}
+		metaLen := binary.BigEndian.Uint32(raw[5:9])
+		if uint64(len(raw)) < uint64(9)+uint64(metaLen) {
+			return nil, nil, fmt.Errorf("truncated snapshot meta")
+		}
+		var meta SnapshotMeta
+		if err := json.Unmarshal(raw[9:9+metaLen], &meta); err != nil {
+			return nil, nil, fmt.Errorf("decode snapshot meta: %w", err)
+		}
+		data := raw[9+metaLen:]
+		if len(data) == 0 {
+			return &meta, nil, nil
+		}
+		return &meta, data, nil
+	}
+
+	// Legacy v1: the whole snapshot is one JSON document.
+	var payload snapshotFile
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, nil, fmt.Errorf("decode legacy snapshot: %w", err)
+	}
+	meta := payload.Meta
+	if len(payload.Data) == 0 {
 		return &meta, nil, nil
 	}
-	return &meta, data, nil
+	return &meta, payload.Data, nil
 }
 
 func (s *Storage) HasSnapshot() bool {
